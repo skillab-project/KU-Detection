@@ -60,7 +60,7 @@ To run the specific unit tests for the API routes:
 1.  Ensure you have installed the necessary dependencies (usually via `pip install -r requirements.txt` in the project's root directory) and activated your virtual environment.
 2.  Execute the following command from the project's **root** directory:
 
-    ```bash
+    ```
     python -m unittest api.test_routes
     ```
 
