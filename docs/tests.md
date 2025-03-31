@@ -61,7 +61,7 @@ To run the specific unit tests for the API routes:
 2.  Execute the following command from the project's **root** directory:
 
     ```bash
-    python -m unittest api.test_routes.py
+    python -m unittest api.test_routes
     ```
 
 ## 4. Existing Test Suite Overview

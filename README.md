@@ -2,7 +2,7 @@
 
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repo-blue?logo=github)](https://github.com/skillab-project/KU-Detection)
 
-Based on https://github.com/ElisavetKanidou/KU-Detection-Back-End
+Based on [![GitHub Repo](https://img.shields.io/badge/GitHub-Repo-blue?logo=github)](https://github.com/ElisavetKanidou/KU-Detection-Back-End) 
 
 ## Description
 
