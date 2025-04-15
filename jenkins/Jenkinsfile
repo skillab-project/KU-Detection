@@ -15,6 +15,37 @@ pipeline {
 
     stages {
         // *************************
+        // *** TESTING STAGE ***
+        // *************************
+        stage("Run_Unit_Tests") {
+            steps {
+                echo "***** Running Unit Tests *****"
+                sh '''
+                    python3.10 -m venv ${VENV_DIR}
+                    . ${VENV_DIR}/bin/activate
+                    python -m pip install --upgrade pip
+                    pip install -r requirements.txt
+
+                    # Git LFS for model fetch
+                    curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+                    sudo apt-get install -y git-lfs
+                    git lfs install --skip-repo
+
+                    mkdir -p models/codebert
+                    git clone https://huggingface.co/nnikolaidis/java-ku models/codebert
+                    cd models/codebert
+                    git lfs pull
+                    rm -rf .git
+                    cd ../..
+
+                    # Run tests
+                    . ${VENV_DIR}/bin/activate
+                    python -m unittest discover
+                '''
+            }
+        }
+        
+        // *************************
         // *** IMAGE BUILD STAGE ***
         // *************************
         stage("Build_Docker_Images"){
@@ -63,10 +94,17 @@ pipeline {
         }
     }
     post{
-        failure{
-            // slackSend (color: "#FF0000", message: "Job FAILED: '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL})")
-            sh 'docker image rm ${APP_NAME}:test &> /dev/null || true'
-            sh 'DOCKER_TAG=test docker compose down --rmi all'
+        always {
+            // Remove containers and networks
+            sh 'DOCKER_TAG=test docker compose down --rmi all --volumes --remove-orphans || true'
+    
+            // Remove specific images
+            sh 'docker rmi ${APP_NAME}:test || true'
+            sh 'docker rmi ${APP_NAME}:${DOCKER_TAG} || true'
+            sh 'docker rmi ${APP_NAME}:latest || true'
+        }
+        failure {
+            echo "Build failed. Cleaned up docker environment."
         }
     }
 }
