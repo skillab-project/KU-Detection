@@ -24,7 +24,7 @@ pipeline {
                     docker run --rm \
                         -v "$PWD":/app \
                         -w /app \
-                        python:3.10-slim bash -c "
+                        python:3.11-bullseye bash -c "
                             apt-get update && \
                             apt-get install -y git curl && \
                             curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash && \
