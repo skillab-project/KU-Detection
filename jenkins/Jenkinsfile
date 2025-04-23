@@ -24,17 +24,8 @@ pipeline {
                     docker run --rm \
                         -v "$PWD":/app \
                         -w /app \
-                        python:3.11-bullseye bash -c "
-                            apt-get update && \
-                            apt-get install -y git curl && \
-                            curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash && \
-                            apt-get install -y git-lfs && \
-                            git lfs install --skip-repo && \
-                            pip install --upgrade pip && \
+                        nikosnikolaidis/skillab-ku-backend-base bash -c "
                             pip install -r requirements.txt && \
-                            mkdir -p models/codebert && \
-                            git clone https://huggingface.co/nnikolaidis/java-ku models/codebert && \
-                            cd models/codebert && git lfs pull && rm -rf .git && cd ../.. && \
                             python -m unittest discover
                         "
                 '''
