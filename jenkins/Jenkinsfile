@@ -24,28 +24,8 @@ pipeline {
 					docker run --rm \
 						-v "$PWD":/tmp/app_files \
 						nikosnikolaidis/skillab-ku-backend-base bash -c "
-							# Ensure the /app directory exists (it should in the container, but this is for safety)
-							mkdir -p /app
-
-							# List directories to confirm paths
-							echo 'Listing /tmp/app_files (mounted):'
-							ls /tmp/app_files
-
-							echo 'Listing /app before copy (checking if models exists):'
-							ls /app || echo '/app does not exist'
-
-							# Move files from /tmp/app_files to /app, but preserve /app/models
-							cp -r /tmp/app_files/* /app/ 2>/dev/null || true
-
-							# If /tmp/app_files/models exists, preserve it in /app
-							if [ -d /tmp/app_files/models ]; then
-								rm -rf /app/models
-								cp -r /tmp/app_files/models /app/
-							fi
-
-							# List /app to ensure the files are correctly copied
-							echo 'Listing /app after copy:'
-							ls /app
+							# Move files from /tmp/app_files to /app
+							cp -r /tmp/app_files/* /app/ 
 
 							# Change working directory to /app and run the commands
 							cd /app && \
