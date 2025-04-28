@@ -22,7 +22,7 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 # Load model
 print("ROOT_DIR: "+ ROOT_DIR)
 print("CODEBERT_BASE_PATH: "+ CODEBERT_BASE_PATH)
-model = load_codebert_model(CODEBERT_BASE_PATH, 27)
+#model = load_codebert_model(CODEBERT_BASE_PATH, 27)
 
 def get_db_connection():
     conn = psycopg2.connect(
