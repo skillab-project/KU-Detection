@@ -7,7 +7,7 @@ import time
 import logging
 from core.ml_operations.loader import load_codebert_model
 from core.analysis.codebert_sliding_window import codebert_sliding_window
-from config.settings import CLONED_REPO_BASE_PATH, CODEBERT_BASE_PATH
+from config.settings import CLONED_REPO_BASE_PATH, CODEBERT_BASE_PATH, ROOT_DIR
 
 
 # Database connection settings
@@ -20,6 +20,8 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 
 
 # Load model
+print("ROOT_DIR: "+ ROOT_DIR)
+print("CODEBERT_BASE_PATH: "+ CODEBERT_BASE_PATH)
 model = load_codebert_model(CODEBERT_BASE_PATH, 27)
 
 def get_db_connection():
