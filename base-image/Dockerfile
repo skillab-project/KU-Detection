@@ -1,5 +1,6 @@
 FROM python:3.11-bullseye
-COPY . /.
+COPY . /app/.
+WORKDIR /app
 
 # Install dependencies, including Git and Git LFS
 RUN apt-get update && apt-get install -y \
@@ -18,4 +19,4 @@ RUN mkdir -p models/codebert && \
     cd models/codebert && git lfs pull && \
     rm -rf .git
 
-RUN pip install -r /requirements.txt
+RUN pip install -r /app/requirements.txt
