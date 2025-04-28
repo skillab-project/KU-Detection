@@ -11,7 +11,7 @@ import logging
 logging.disable(logging.CRITICAL)
 
 # Προσθήκη του γονικού φακέλου στο sys.path για να βρει τα modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.abspath(os.getcwd()))
 
 from api.routes import init_routes
 from core.ml_operations.loader import load_codebert_model
