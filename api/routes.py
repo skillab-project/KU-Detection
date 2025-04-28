@@ -22,7 +22,7 @@ from core.utils.code_files_loader import read_files_from_dict_list
 from flask_swagger_ui import get_swaggerui_blueprint  # Import the Swagger UI blueprint
 from core.ml_operations.loader import load_codebert_model
 from core.analysis.codebert_sliding_window import codebert_sliding_window
-from config.settings import CLONED_REPO_BASE_PATH, CODEBERT_BASE_PATH
+from config.settings import CLONED_REPO_BASE_PATH, CODEBERT_BASE_PATH, ROOT_DIR
 import threading
 import time
 import logging
@@ -34,6 +34,8 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes.  This is generally better than disabling it.
 
 # Load model
+print("ROOT_DIR: "+ ROOT_DIR)
+print("CODEBERT_BASE_PATH: "+ CODEBERT_BASE_PATH)
 model = load_codebert_model(CODEBERT_BASE_PATH, 27)
 
 
