@@ -23,6 +23,7 @@ pipeline {
                 sh '''
                     docker run --rm \
                         -v "$PWD":/ \
+                        -w / \
                         nikosnikolaidis/skillab-ku-backend-base bash -c "
                             pip install -r requirements.txt && \
                             python -m unittest discover
