@@ -22,20 +22,22 @@ pipeline {
                 echo "***** Running Unit Tests *****"
                 sh '''
 					docker run --rm \
-                    -v "$PWD":/tmp/app_files \
-                    -w /tmp/app_files \
-                    nikosnikolaidis/skillab-ku-backend-base bash -c "
-                        # Copy files from /tmp/app_files to /app, but preserve /app/models
-                        cp -r /tmp/app_files/* /app/
-                        # Ensure /app/models is not overwritten
-                        rm -rf /app/models
-                        cp -r /tmp/app_files/models /app/
+						-v "$PWD":/tmp/app_files \
+						-w /tmp/app_files \
+						nikosnikolaidis/skillab-ku-backend-base bash -c "
+							cd / && ls \
+							cd /app && ls
+							# Copy files from /tmp/app_files to /app, but preserve /app/models
+							cp -r /tmp/app_files/* /app/
+							# Ensure /app/models is not overwritten
+							rm -rf /app/models
+							cp -r /tmp/app_files/models /app/
 
-                        # Change working directory to /app and run the commands
-                        cd /app && \
-                        pip install -r requirements.txt && \
-                        python -m unittest discover
-                    "
+							# Change working directory to /app and run the commands
+							cd /app && \
+							pip install -r requirements.txt && \
+							python -m unittest discover
+						"
                 '''
             }
         }
