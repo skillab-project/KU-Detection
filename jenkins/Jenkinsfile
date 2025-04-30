@@ -87,16 +87,14 @@ pipeline {
     }
     post{
         always {
-            // Remove containers and networks
-            sh 'DOCKER_TAG=test docker compose down --rmi all --volumes --remove-orphans || true'
-    
             // Remove specific images
             sh 'docker rmi ${APP_NAME}:test || true'
-            sh 'docker rmi ${APP_NAME}:${DOCKER_TAG} || true'
-            sh 'docker rmi ${APP_NAME}:latest || true'
         }
         failure {
             echo "Build failed. Cleaned up docker environment."
+            sh 'DOCKER_TAG=test docker compose down --rmi all --volumes --remove-orphans || true'
+            sh 'docker rmi ${APP_NAME}:${DOCKER_TAG} || true'
+            sh 'docker rmi ${APP_NAME}:latest || true'
         }
     }
 }
