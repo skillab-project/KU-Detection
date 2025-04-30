@@ -53,6 +53,7 @@ class FlaskAPITests(unittest.TestCase):
         app.pull_repo, app.save_commits_to_db
         """
         # Σενάριο 1: Το repo ΔΕΝ υπάρχει -> clone
+        print("test")
         mock_repo_exists.return_value = False
         mock_extract.return_value = self.sample_commits  # return sample commits
         mock_save_commits.return_value = None
