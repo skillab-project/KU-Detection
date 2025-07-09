@@ -161,8 +161,7 @@ def get_all_repos_from_db():
             with conn.cursor() as cur:
                 cur.execute('''
                     SELECT name, url, description, comments, created_at, updated_at, analysis_status, analysis_start_time, analysis_end_time, analysis_progress, analysis_error_message
-                    FROM repositories
-                    WHERE url LIKE 'https://github.com/apache/%';
+                    FROM repositories;
                 ''')
 
                 rows = cur.fetchall()
@@ -365,8 +364,7 @@ def get_allanalysis_from_db():
         cur.execute('''
             SELECT ar.filename, ar.author, ar.timestamp, ar.sha, ar.detected_kus, ar.elapsed_time
             FROM analysis_results ar
-            JOIN repositories r ON ar.repo_name = r.name  
-            WHERE r.url LIKE 'https://github.com/apache/%';
+            JOIN repositories r ON ar.repo_name = r.name;
         ''')
         rows = cur.fetchall()
 
