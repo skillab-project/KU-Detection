@@ -83,6 +83,11 @@
                     "description": "URL of the repository",
                     "example": "https://github.com/user/my-repo.git"
                   },
+                  "organization": {
+                    "type": "string",
+                    "description": "The organization or owner of the repository",
+                    "example": "apache"
+                  },
                   "description": {
                     "type": "string",
                     "description": "Description of the repository",
@@ -135,51 +140,51 @@
           }
         }
       },
-      "get":{
-          "summary": "List Repositories",
-          "description": "Lists all repository entries",
-            "responses": {
-                "200":{
-                    "description": "Successsful Operation",
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "array",
-                                "items": {
-                                  "type": "object",
-                                    "properties": {
-                                        "repo_name": {
-                                            "type": "string",
-                                            "description": "Name of repository"
-                                        },
-                                        "url": {
-                                            "type": "string",
-                                            "description": "Repository URL"
-                                        }
-                                    }
-                                }
-                            }
-                        }
+      "get": {
+        "summary": "List Repositories",
+        "description": "Lists all repository entries",
+        "responses": {
+          "200": {
+            "description": "Successsful Operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "repo_name": {
+                        "type": "string",
+                        "description": "Name of repository"
+                      },
+                      "url": {
+                        "type": "string",
+                        "description": "Repository URL"
+                      }
                     }
-                },
-                "500": {
-                    "description": "Internal server error",
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "properties": {
-                                    "error": {
-                                        "type": "string",
-                                        "description": "Error message",
-                                        "example": "Database connection failed"
-                                    }
-                                }
-                            }
-                        }
-                    }
+                  }
                 }
+              }
             }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Error message",
+                      "example": "Database connection failed"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/detected_kus": {
@@ -259,6 +264,11 @@
                     "description": "URL of the repository",
                     "example": "https://github.com/user/my-repo.git"
                   },
+                  "organization": {
+                    "type": "string",
+                    "description": "The organization or owner of the repository",
+                    "example": "apache"
+                  },
                   "description": {
                     "type": "string",
                     "description": "Description of the repository",
@@ -312,391 +322,511 @@
         }
       }
     },
-        "/timestamps": {
-            "get":{
-                "summary": "Get Commits Timestamps",
-                "description": "Retrieve commits timestampts.",
-                "parameters": [
-                    {
-                        "name": "repo_name",
-                        "in": "query",
-                        "required": true,
-                        "description": "Name of the repository to edit",
-                        "schema": {
-                          "type": "string"
-                         }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "successful operation",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                     "type": "array",
-                                     "items": {
-                                         "type": "object",
-                                          "properties": {
-                                             "sha": {
-                                                 "type": "string",
-                                                 "description": "Sha of the commit"
-                                             },
-                                             "timestamp": {
-                                                "type": "string",
-                                                "description": "Timestamp of the commit"
-                                            }
-                                          }
-                                     }
-                                 }
-                             }
-                         }
-                    },
-                    "400": {
-                        "description": "Invalid Request"
-                    },
-                    "500": {
-                        "description": "Internal server error",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                     "type": "object",
-                                          "properties": {
-                                              "error": {
-                                                  "type": "string",
-                                                  "description": "Error Message"
-                                              }
-                                          }
-                                 }
-                             }
-                         }
-                    }
-                }
+    "/timestamps": {
+      "get": {
+        "summary": "Get Commits Timestamps",
+        "description": "Retrieve commits timestampts.",
+        "parameters": [
+          {
+            "name": "repo_name",
+            "in": "query",
+            "required": true,
+            "description": "Name of the repository to edit",
+            "schema": {
+              "type": "string"
             }
-        },
-       "/historytime": {
-            "get":{
-                "summary": "Get Repository History Time",
-                "description": "Retrieves repository history",
-                "parameters": [
-                    {
-                        "name": "repo_url",
-                        "in": "query",
-                        "required": true,
-                        "description": "Repo URL",
-                        "schema": {
-                          "type": "string"
-                         }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "sha": {
+                        "type": "string",
+                        "description": "Sha of the commit"
+                      },
+                      "timestamp": {
+                        "type": "string",
+                        "description": "Timestamp of the commit"
+                      }
                     }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Successful operation",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "repo_name": {
-                                          "type": "string",
-                                          "description": "Repo Name"
-                                        },
-                                        "commit_dates": {
-                                            "type": "array",
-                                            "description": "Commits Datess"
-                                        }
-                                    }
-                                 }
-                             }
-                         }
-                    },
-                    "400": {
-                        "description": "Invalid Request"
-                    },
-                    "500": {
-                        "description": "Internal server error",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                     "type": "object",
-                                          "properties": {
-                                              "error": {
-                                                  "type": "string",
-                                                  "description": "Error Message"
-                                              }
-                                          }
-                                 }
-                             }
-                         }
-                    }
+                  }
                 }
+              }
             }
-        },
-       "/delete_repo/{repo_name}": {
-            "delete":{
-                "summary": "Delete Repository",
-                "description": "Delete a repository entry",
-                "parameters": [
-                    {
-                        "name": "repo_name",
-                        "in": "path",
-                        "required": true,
-                        "description": "Repo to Delete",
-                        "schema": {
-                          "type": "string"
-                         }
+          },
+          "400": {
+            "description": "Invalid Request"
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Error Message"
                     }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Successful operation",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "message": {
-                                          "type": "string",
-                                          "description": "Message"
-                                        }
-                                    }
-                                 }
-                             }
-                         }
-                    },
-                    "500": {
-                        "description": "Internal server error",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                     "type": "object",
-                                          "properties": {
-                                              "error": {
-                                                  "type": "string",
-                                                  "description": "Error Message"
-                                              }
-                                          }
-                                 }
-                             }
-                         }
-                    }
+                  }
                 }
+              }
             }
-        },
-        "/analyze": {
-            "get":{
-                "summary": "Analyze a Repository",
-                "description": "Analyze a repository",
-                "parameters": [
-                    {
-                        "name": "repo_url",
-                        "in": "query",
-                        "required": true,
-                        "description": "URL to Analyze",
-                        "schema": {
-                          "type": "string"
-                         }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Successful operation",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "": {
-                                          "type": "string",
-                                          "description": "TBA"
-                                        }
-                                    }
-                                 }
-                             }
-                         }
-                    },
-                    "400": {
-                        "description": "Invalid Request"
-                    },
-                     "500": {
-                        "description": "Internal server error",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                     "type": "object",
-                                          "properties": {
-                                              "error": {
-                                                  "type": "string",
-                                                  "description": "Error Message"
-                                              }
-                                          }
-                                 }
-                             }
-                         }
-                    }
-                }
-            }
-        },
-        "/analysis_status": {
-            "get":{
-                "summary": "Analysis Status",
-                "description": "Analisis Status",
-                "parameters": [
-                    {
-                        "name": "repo_name",
-                        "in": "query",
-                        "required": true,
-                        "description": "Repo Name",
-                        "schema": {
-                          "type": "string"
-                         }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Successful operation",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "status": {
-                                          "type": "string",
-                                          "description": "Status"
-                                        }
-                                    }
-                                 }
-                             }
-                         }
-                    },
-                    "400": {
-                        "description": "Invalid Request"
-                    },
-                     "500": {
-                        "description": "Internal server error",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                     "type": "object",
-                                          "properties": {
-                                              "error": {
-                                                  "type": "string",
-                                                  "description": "Error Message"
-                                              }
-                                          }
-                                 }
-                             }
-                         }
-                    }
-                }
-            }
-        },
-        "/analyzedb": {
-            "get":{
-                "summary": "Analyzed DB",
-                "description": "Analyzed DB",
-                "parameters": [
-                    {
-                        "name": "repo_name",
-                        "in": "query",
-                        "required": true,
-                        "description": "repo_name",
-                        "schema": {
-                          "type": "string"
-                         }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Successful operation",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                       "type": "array",
-                                        "items": {
-                                         "type": "object",
-                                          "properties": {
-                                            "filename": {
-                                                "type": "string",
-                                                "description": "file name"
-                                              },
-                                              "timestamp": {
-                                                "type": "string",
-                                                "description": "time stamp"
-                                             }
-                                        }
-                                     }
-                                 }
-                             }
-                         }
-                    },
-                    "400": {
-                        "description": "Invalid Request"
-                    },
-                     "500": {
-                        "description": "Internal server error",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                     "type": "object",
-                                          "properties": {
-                                              "error": {
-                                                  "type": "string",
-                                                  "description": "Error Message"
-                                              }
-                                          }
-                                 }
-                             }
-                         }
-                    }
-                }
-            }
-        },
-        "/analyzeall": {
-             "get":{
-                "summary": "All Analysis",
-                "description": "Gets all analysis from the db",
-                "responses": {
-                    "200": {
-                        "description": "Successful operation",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                      "type": "array",
-                                        "items": {
-                                         "type": "object",
-                                          "properties": {
-                                            "filename": {
-                                                "type": "string",
-                                                "description": "file name"
-                                              },
-                                              "timestamp": {
-                                                "type": "string",
-                                                "description": "time stamp"
-                                             }
-                                        }
-                                     }
-                                 }
-                             }
-                         }
-                    },
-                    "500": {
-                        "description": "Internal server error",
-                         "content": {
-                             "application/json":{
-                                 "schema": {
-                                     "type": "object",
-                                          "properties": {
-                                              "error": {
-                                                  "type": "string",
-                                                  "description": "Error Message"
-                                              }
-                                          }
-                                 }
-                             }
-                         }
-                    }
-                }
-            }
+          }
         }
+      }
+    },
+    "/historytime": {
+      "get": {
+        "summary": "Get Repository History Time",
+        "description": "Retrieves repository history",
+        "parameters": [
+          {
+            "name": "repo_url",
+            "in": "query",
+            "required": true,
+            "description": "Repo URL",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "repo_name": {
+                      "type": "string",
+                      "description": "Repo Name"
+                    },
+                    "commit_dates": {
+                      "type": "array",
+                      "description": "Commits Datess"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid Request"
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Error Message"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/delete_repo/{repo_name}": {
+      "delete": {
+        "summary": "Delete Repository",
+        "description": "Delete a repository entry",
+        "parameters": [
+          {
+            "name": "repo_name",
+            "in": "path",
+            "required": true,
+            "description": "Repo to Delete",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "description": "Message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Error Message"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyze": {
+      "get": {
+        "summary": "Analyze a Repository",
+        "description": "Analyze a repository",
+        "parameters": [
+          {
+            "name": "repo_url",
+            "in": "query",
+            "required": true,
+            "description": "URL to Analyze",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "": {
+                      "type": "string",
+                      "description": "TBA"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid Request"
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Error Message"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analysis_status": {
+      "get": {
+        "summary": "Analysis Status",
+        "description": "Analisis Status",
+        "parameters": [
+          {
+            "name": "repo_name",
+            "in": "query",
+            "required": true,
+            "description": "Repo Name",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "description": "Status"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid Request"
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Error Message"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyzedb": {
+      "get": {
+        "summary": "Analyzed DB",
+        "description": "Analyzed DB",
+        "parameters": [
+          {
+            "name": "repo_name",
+            "in": "query",
+            "required": true,
+            "description": "repo_name",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "filename": {
+                        "type": "string",
+                        "description": "file name"
+                      },
+                      "timestamp": {
+                        "type": "string",
+                        "description": "time stamp"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid Request"
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Error Message"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyzeall": {
+      "get": {
+        "summary": "All Analysis",
+        "description": "Gets all analysis from the db",
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "filename": {
+                        "type": "string",
+                        "description": "file name"
+                      },
+                      "timestamp": {
+                        "type": "string",
+                        "description": "time stamp"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Error Message"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ku_statistics": {
+      "get": {
+        "tags": [
+          "Statistics"
+        ],
+        "summary": "Get KU Statistics",
+        "description": "Returns the total count of occurrences for each unique KU across all projects. Ideal for bar plots.",
+        "responses": {
+          "200": {
+            "description": "Statistics retrieved successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "ku_id": {
+                        "type": "string",
+                        "example": "KU-005"
+                      },
+                      "count": {
+                        "type": "integer",
+                        "example": 152
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error while retrieving data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organization_stats": {
+      "get": {
+        "tags": [
+          "Statistics"
+        ],
+        "summary": "Get project counts by organization",
+        "description": "Returns a list of organization names (e.g., 'apache', 'google') and the number of projects stored in the database for each.",
+        "responses": {
+          "200": {
+            "description": "Statistics retrieved successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "organization": {
+                        "type": "string",
+                        "example": "apache"
+                      },
+                      "count": {
+                        "type": "integer",
+                        "example": 5
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error while retrieving data."
+          }
+        }
+      }
+    },
+    "/ku_by_organization": {
+      "get": {
+        "tags": [
+          "Statistics"
+        ],
+        "summary": "Get KU statistics by organization",
+        "description": "Returns a list of organizations, and for each one, a list of the KUs detected in its projects and their respective counts.",
+        "responses": {
+          "200": {
+            "description": "Statistics retrieved successfully."
+          },
+          "500": {
+            "description": "Server error while retrieving data."
+          }
+        }
+      }
+    },
+    "/monthly_analysis_stats": {
+      "get": {
+        "tags": [
+          "Statistics"
+        ],
+        "summary": "Get monthly analysis counts by organization",
+        "description": "Returns a list of organizations, and for each one, the count of analyses performed per month on its projects.",
+        "responses": {
+          "200": {
+            "description": "Statistics retrieved successfully."
+          },
+          "500": {
+            "description": "Server error while retrieving data."
+          }
+        }
+      }
+    }
   }
 }
