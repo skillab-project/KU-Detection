@@ -47,6 +47,7 @@ def create_tables():
             id SERIAL PRIMARY KEY,
             name VARCHAR(255) UNIQUE NOT NULL,
             url VARCHAR(255),
+            organization VARCHAR(255),
             description TEXT,
             comments TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -89,14 +90,21 @@ def create_tables():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Check if tables already exists
         cur.execute(table_check_query)
         (table_exists,) = cur.fetchone()
         if table_exists:
-            print("Tables already exists. Skipping table creation.")
+            print("Tables already exist. Skipping table creation.")
+            cur.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name='repositories' AND column_name='organization'
+            """)
+            if cur.fetchone() is None:
+                print("Adding 'organization' column to existing 'repositories' table.")
+                cur.execute("ALTER TABLE repositories ADD COLUMN organization VARCHAR(255);")
+                conn.commit()
             return
 
-        # Create tables
         for command in commands:
             cur.execute(command)
         cur.close()
@@ -107,19 +115,21 @@ def create_tables():
         if conn is not None:
             conn.close()
 
-def save_repo_to_db(name, url=None, description=None, comments=None):
+# --- ΔΙΟΡΘΩΣΗ: Η συνάρτηση πλέον δέχεται τον οργανισμό ως παράμετρο ---
+def save_repo_to_db(name, url=None, organization=None, description=None, comments=None):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute('''
-            INSERT INTO repositories (name, url, description, comments)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO repositories (name, url, organization, description, comments)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (name) DO UPDATE
             SET url = EXCLUDED.url,
+                organization = EXCLUDED.organization,
                 description = EXCLUDED.description,
                 comments = EXCLUDED.comments,
                 updated_at = CURRENT_TIMESTAMP
-        ''', (name, url, description, comments))
+        ''', (name, url, organization, description, comments))
         conn.commit()
         cur.close()
     except Exception as e:
@@ -131,27 +141,14 @@ def delete_repo_from_db(repo_name):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-
-        # Διαγραφή από τον πίνακα analysis_results
-        cur.execute('''
-            DELETE FROM analysis_results WHERE repo_name = %s
-        ''', (repo_name,))
-
-        # Διαγραφή από τον πίνακα commits
-        cur.execute('''
-            DELETE FROM commits WHERE repo_name = %s
-        ''', (repo_name,))
-
-        # Διαγραφή από τον πίνακα repositories
-        cur.execute('''
-            DELETE FROM repositories WHERE name = %s
-        ''', (repo_name,))
-
+        cur.execute('DELETE FROM analysis_results WHERE repo_name = %s', (repo_name,))
+        cur.execute('DELETE FROM commits WHERE repo_name = %s', (repo_name,))
+        cur.execute('DELETE FROM repositories WHERE name = %s', (repo_name,))
         conn.commit()
         cur.close()
     except Exception as e:
         print(f"An error occurred: {e}")
-        raise e  # Ξαναπετάμε το σφάλμα για να το διαχειριστεί η διαδρομή Flask
+        raise e
     finally:
         conn.close()
 
@@ -160,29 +157,29 @@ def get_all_repos_from_db():
         with get_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute('''
-                    SELECT name, url, description, comments, created_at, updated_at, analysis_status, analysis_start_time, analysis_end_time, analysis_progress, analysis_error_message
+                    SELECT name, url, organization, description, comments, created_at, updated_at, 
+                           analysis_status, analysis_start_time, analysis_end_time, 
+                           analysis_progress, analysis_error_message
                     FROM repositories;
                 ''')
-
                 rows = cur.fetchall()
-
                 repos = []
                 for row in rows:
                     repo = {
                         "name": row[0],
                         "url": row[1],
-                        "description": row[2],
-                        "comments": row[3],
-                        "created_at": row[4].isoformat() if row[4] else None,
-                        "updated_at": row[5].isoformat() if row[5] else None,
-                        "analysis_status": row[6],
-                        "analysis_start_time": row[7].isoformat() if row[7] else None,
-                        "analysis_end_time": row[8].isoformat() if row[8] else None,
-                        "analysis_progress": row[9],
-                        "analysis_error_message": row[10]
+                        "organization": row[2],
+                        "description": row[3],
+                        "comments": row[4],
+                        "created_at": row[5].isoformat() if row[5] else None,
+                        "updated_at": row[6].isoformat() if row[6] else None,
+                        "analysis_status": row[7],
+                        "analysis_start_time": row[8].isoformat() if row[8] else None,
+                        "analysis_end_time": row[9].isoformat() if row[9] else None,
+                        "analysis_progress": row[10],
+                        "analysis_error_message": row[11]
                     }
                     repos.append(repo)
-
                 return repos
     except Exception as e:
         print(f"An error occurred: {e}")
@@ -590,3 +587,167 @@ def analyze_repository_background(repo_name, files):
     logging.info(f"Analysis completed for repository: {repo_name}. Total files analyzed: {len(analysis_results)}")
     update_analysis_status(repo_name, 'completed', start_time=start_time, end_time=end_time, progress=100)
     yield f"data: {json.dumps({'progress': 100, 'message': 'Analysis completed'})}\n\n"
+
+def get_ku_counts_from_db():
+    sql_query = """
+        SELECT
+            ku.key AS ku_id,
+            COUNT(*) AS ku_count
+        FROM
+            analysis_results,
+            LATERAL jsonb_each_text(detected_kus) AS ku
+        WHERE
+            ku.value = '1'
+        GROUP BY
+            ku_id
+        ORDER BY
+            ku_count DESC;
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(sql_query)
+        rows = cur.fetchall()
+        cur.close()
+        ku_counts = [{"ku_id": row[0], "count": int(row[1])} for row in rows]
+        return ku_counts
+    except Exception as e:
+        print(f"An error occurred while getting KU counts: {e}")
+        return None
+    finally:
+        if 'conn' in locals() and conn is not None:
+            conn.close()
+
+def get_organization_project_counts():
+    """
+    Ανακτά από τη βάση δεδομένων το πλήθος των projects ανά οργανισμό,
+    βασιζόμενο στην στήλη 'organization'.
+    """
+    sql_query = """
+        SELECT
+            organization,
+            COUNT(*) AS project_count
+        FROM
+            repositories
+        WHERE
+            organization IS NOT NULL AND organization != ''
+        GROUP BY
+            organization
+        ORDER BY
+            project_count DESC;
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(sql_query)
+        rows = cur.fetchall()
+        cur.close()
+
+        org_counts = [{"organization": row[0], "count": row[1]} for row in rows]
+        return org_counts
+
+    except Exception as e:
+        print(f"An error occurred while getting organization counts: {e}")
+        return None
+    finally:
+        if 'conn' in locals() and conn is not None:
+            conn.close()
+
+def get_ku_counts_by_organization():
+    """
+    Επιστρέφει τα στατιστικά των KUs ομαδοποιημένα ανά οργανισμό.
+    """
+    sql_query = """
+        SELECT
+            r.organization,
+            ku.key AS ku_id,
+            COUNT(*) AS ku_count
+        FROM
+            analysis_results ar
+        JOIN
+            repositories r ON ar.repo_name = r.name,
+            LATERAL jsonb_each_text(ar.detected_kus) AS ku
+        WHERE
+            r.organization IS NOT NULL AND r.organization != '' AND ku.value = '1'
+        GROUP BY
+            r.organization, ku_id
+        ORDER BY
+            r.organization, ku_count DESC;
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(sql_query)
+        rows = cur.fetchall()
+        cur.close()
+
+        organizations_data = {}
+        for row in rows:
+            org_name, ku_id, ku_count = row
+            if org_name not in organizations_data:
+                organizations_data[org_name] = {
+                    "organization": org_name,
+                    "ku_counts": []
+                }
+            organizations_data[org_name]["ku_counts"].append({
+                "ku_id": ku_id,
+                "count": ku_count
+            })
+        return list(organizations_data.values())
+
+    except Exception as e:
+        print(f"An error occurred while getting KU counts by organization: {e}")
+        return None
+    finally:
+        if 'conn' in locals() and conn is not None:
+            conn.close()
+
+def get_monthly_analysis_counts_by_org():
+    """
+    Επιστρέφει το πλήθος των αναλύσεων ανά μήνα, ομαδοποιημένο ανά οργανισμό.
+    """
+    sql_query = """
+        SELECT
+            r.organization,
+            DATE_TRUNC('month', ar.timestamp)::date AS analysis_month,
+            COUNT(ar.id) AS analysis_count
+        FROM
+            analysis_results ar
+        JOIN
+            repositories r ON ar.repo_name = r.name
+        WHERE
+            r.organization IS NOT NULL AND r.organization != ''
+        GROUP BY
+            r.organization, analysis_month
+        ORDER BY
+            r.organization, analysis_month;
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(sql_query)
+        rows = cur.fetchall()
+        cur.close()
+
+        organizations_data = {}
+        for row in rows:
+            org_name, month_date, analysis_count = row
+            if org_name not in organizations_data:
+                organizations_data[org_name] = {
+                    "organization": org_name,
+                    "monthly_counts": []
+                }
+            organizations_data[org_name]["monthly_counts"].append({
+                "month": month_date.strftime('%Y-%m'),
+                "count": analysis_count
+            })
+        return list(organizations_data.values())
+
+    except Exception as e:
+        print(f"An error occurred while getting monthly analysis counts by org: {e}")
+        return None
+    finally:
+        if 'conn' in locals() and conn is not None:
+            conn.close()
+
+
