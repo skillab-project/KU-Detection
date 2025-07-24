@@ -1,7 +1,16 @@
 import os
+from dotenv import load_dotenv
+import concurrent.futures
+import time
+import logging
+from flask import Flask, request, jsonify
+import json
+import datetime
+
+# Φόρτωσε τις μεταβλητές από το αρχείο .env
+load_dotenv()
 
 from flask_cors import CORS
-
 from api.data_db import (
     save_commits_to_db,
     get_commits_from_db,
@@ -15,176 +24,171 @@ from api.data_db import (
     update_analysis_status,
     get_analysis_status,
     get_allanalysis_from_db,
+    get_ku_counts_from_db,
+    get_organization_project_counts,
+    get_ku_counts_by_organization,
+    get_monthly_analysis_counts_by_org,
 )
 from core.git_operations import clone_repo, repo_exists, extract_contributions
 from core.git_operations.repo import pull_repo, get_history_repo
 from core.utils.code_files_loader import read_files_from_dict_list
-from flask_swagger_ui import get_swaggerui_blueprint  # Import the Swagger UI blueprint
+from flask_swagger_ui import get_swaggerui_blueprint
 from core.ml_operations.loader import load_codebert_model
 from core.analysis.codebert_sliding_window import codebert_sliding_window
 from config.settings import CLONED_REPO_BASE_PATH, CODEBERT_BASE_PATH
-import threading
-import time
-import logging
-from flask import Flask, request, jsonify, Response
-import json
-import datetime
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes.  This is generally better than disabling it.
+CORS(app)
+
+# --- ΑΛΛΑΓΗ 1: Δημιουργία ενός global ThreadPoolExecutor ---
+# Δημιουργούμε τον executor μία φορά όταν ξεκινάει η εφαρμογή.
+# Αυτός θα διαχειρίζεται όλες τις background εργασίες μας.
+try:
+    MAX_WORKERS = int(os.getenv('ANALYSIS_WORKERS', 4))
+except (ValueError, TypeError):
+    MAX_WORKERS = 4
+# Αυτός ο executor θα τρέχει τις κύριες αναλύσεις (μία ανά repository)
+background_task_executor = concurrent.futures.ThreadPoolExecutor(max_workers=5) # 5 ταυτόχρονες αναλύσεις repo
+
 
 # Load model
+logging.info("Loading CodeBERT model...")
 model = load_codebert_model(CODEBERT_BASE_PATH, 27)
+logging.info("CodeBERT model loaded.")
 
 
-def analyze_repository_background(repo_url, files):
+# ΒΟΗΘΗΤΙΚΗ ΣΥΝΑΡΤΗΣΗ: Αυτή εκτελείται σε κάθε thread για ένα αρχείο (ΠΑΡΑΜΕΝΕΙ ΙΔΙΑ)
+def analyze_single_file(file, repo_url, model):
+    """Analyzes a single file and returns the results."""
+    try:
+        logging.debug(f"Analyzing file in thread: {file.filename}")
+        file_start_time = time.time()
+        results = codebert_sliding_window([file], 35, 35, 1, 25, model)
+        file_end_time = time.time()
+        elapsed_time = file_end_time - file_start_time
+
+        if isinstance(file.timestamp, datetime.datetime):
+            timestmp = file.timestamp.isoformat()
+        else:
+            timestmp = file.timestamp
+
+        file_data = {
+            "filename": file.filename,
+            "author": file.author,
+            "timestamp": timestmp,
+            "sha": file.sha,
+            "detected_kus": file.ku_results,
+            "elapsed_time": elapsed_time,
+            "repoUrl": repo_url,
+        }
+        return file_data
+    except Exception as e:
+        logging.exception(f"Error analyzing file in thread: {file.filename}")
+        return {"error": str(e), "filename": file.filename, "repoUrl": repo_url}
+
+
+# --- ΑΛΛΑΓΗ 2: Η κύρια συνάρτηση ανάλυσης ΤΩΡΑ ΔΕΝ ΕΙΝΑΙ GENERATOR ---
+# Δεν κάνει 'yield' και δεν εξαρτάται από το HTTP request.
+# Απλά τρέχει, κάνει τη δουλειά της και ενημερώνει τη βάση δεδομένων.
+def analyze_repository_task(repo_url, files, model):
+    """
+    This function runs in a background thread, completely detached from the
+    HTTP request. It performs the analysis and updates the database.
+    """
     repo_name = repo_url.split("/")[-1].replace(".git", "")
-    analysis_results = []
     total_files = len(files)
     analyzed_files_count = 0
     start_time = datetime.datetime.now()
 
-    logging.info(f"Starting analysis for repository: {repo_name}")
-    update_analysis_status(
-        repo_name, "in-progress", start_time=start_time, progress=0
-    )
+    logging.info(f"BACKGROUND TASK: Starting analysis for {repo_name} with {total_files} files.")
+    update_analysis_status(repo_name, "in-progress", start_time=start_time, progress=0)
 
-    for file in files.values():
-        try:
-            logging.debug(f"Analyzing file: {file.filename}")
-            file_start_time = time.time()
-            results = codebert_sliding_window([file], 35, 35, 1, 25, model)
-            file_end_time = time.time()
-            elapsed_time = file_end_time - file_start_time
+    try:
+        # Χρησιμοποιούμε έναν τοπικό executor για την παραλληλοποίηση των αρχείων
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # Δημιουργούμε τα future objects
+            futures = {executor.submit(analyze_single_file, file, repo_url, model): file for file in files.values()}
 
-            if isinstance(file.timestamp, datetime.datetime):
-                timestmp = file.timestamp.isoformat()
-            else:
-                timestmp = file.timestamp
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    result_data = future.result()
 
-            file_data = {
-                "filename": file.filename,
-                "author": file.author,
-                "timestamp": timestmp,
-                "sha": file.sha,
-                "detected_kus": file.ku_results,
-                "elapsed_time": elapsed_time,
-                "repoUrl": repo_url,
-            }
-            analysis_results.append(file_data)
-            analyzed_files_count += 1
+                    if "error" in result_data:
+                        logging.error(f"A thread failed for file {result_data.get('filename')}: {result_data['error']}")
+                        continue # Προχωράμε στο επόμενο
 
-            logging.info(
-                f"Successfully analyzed file {analyzed_files_count}/{total_files}: {file.filename}"
-            )
+                    analyzed_files_count += 1
+                    save_analysis_to_db(repo_name, result_data)
+                    progress = int((analyzed_files_count / total_files) * 100)
+                    update_analysis_status(repo_name, "in-progress", start_time=start_time, progress=progress)
 
-            # Save results using repo_name
-            save_analysis_to_db(repo_name, file_data)
+                    logging.info(
+                        f"BACKGROUND TASK: Successfully analyzed file {analyzed_files_count}/{total_files}: {result_data['filename']}")
 
-            # Update progress using repo_name
-            progress = int((analyzed_files_count / total_files) * 100)
-            update_analysis_status(
-                repo_name, "in-progress", start_time=start_time, progress=progress
-            )
+                except Exception as exc:
+                    # Αν ένα future αποτύχει για κάποιο λόγο
+                    logging.error(f'BACKGROUND TASK: A file analysis generated an exception: {exc}')
 
-            # Send progress and data update to frontend, including repoUrl
-            yield f"data: {json.dumps({'progress': progress, 'file_data': file_data, 'repoUrl': repo_url})}\n\n"
+        # Όταν ολοκληρωθεί ο βρόγχος, η ανάλυση τελείωσε επιτυχώς
+        end_time = datetime.datetime.now()
+        logging.info(f"BACKGROUND TASK: Analysis completed for repository: {repo_name}.")
+        update_analysis_status(repo_name, "completed", start_time=start_time, end_time=end_time, progress=100)
 
-        except Exception as e:
-            logging.exception(
-                f"Error analyzing file: {file.filename}. Total analyzed before error: {analyzed_files_count}."
-            )
-            update_analysis_status(
-                repo_name,
-                "error",
-                start_time=start_time,
-                end_time=datetime.datetime.now(),
-                error_message=str(e),
-            )
-            yield f"data: {json.dumps({'error': str(e), 'repoUrl': repo_url})}\n\n"
-            return
-
-    # Final update after all files are processed
-    end_time = datetime.datetime.now()
-    logging.info(
-        f"Analysis completed for repository: {repo_name}. Total files analyzed: {len(analysis_results)}"
-    )
-    update_analysis_status(
-        repo_name, "completed", start_time=start_time, end_time=end_time, progress=100
-    )
-    yield f"data: {json.dumps({'progress': 100, 'message': 'Analysis completed', 'repoUrl': repo_url})}\n\n"
+    except Exception as e:
+        # Αν συμβεί κάποιο μεγάλο λάθος στην όλη διαδικασία
+        end_time = datetime.datetime.now()
+        logging.exception(f"BACKGROUND TASK: A critical error occurred during analysis for {repo_name}.")
+        update_analysis_status(
+            repo_name, "error", start_time=start_time, end_time=end_time,
+            error_message=str(e)
+        )
 
 
 def init_routes(app):
     # Swagger UI Configuration
-    SWAGGER_URL = "/swagger"  # URL for exposing Swagger UI
-    API_URL = "/static/swagger.json"  # URL for the Swagger JSON definition
-
-    swaggerui_blueprint = get_swaggerui_blueprint(
-        SWAGGER_URL,
-        API_URL,
-        config={"app_name": "KU-Detection-Back-End API"},
-    )
+    SWAGGER_URL = "/swagger"
+    API_URL = "/static/swagger.json"
+    swaggerui_blueprint = get_swaggerui_blueprint(SWAGGER_URL, API_URL, config={"app_name": "KU-Detection-Back-End API"})
     app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
 
+    # ( /commits, /repos, /detected_kus, etc. )
     @app.route("/commits", methods=["POST"])
     def list_commits():
-        """
-        Retrieve commits from a repository.
-        """
         data = request.get_json()
         repo_url = data.get("repo_url")
         commit_limit = data.get("limit", 50)
-
         if not repo_url:
             return jsonify({"error": "Repository URL is required"}), 400
-
         repo_name = repo_url.split("/")[-1].replace(".git", "")
-
-        try:  # Added try-except block
+        try:
             if not repo_exists(repo_name):
-                clone_repo(
-                    repo_url,
-                    os.path.join(CLONED_REPO_BASE_PATH, "fake_session_id", str(repo_name)),
-                )
+                clone_repo(repo_url, os.path.join(CLONED_REPO_BASE_PATH, "fake_session_id", str(repo_name)))
             else:
-                # Pull the latest changes if the repository already exists
                 pull_repo(os.path.join(CLONED_REPO_BASE_PATH, "fake_session_id", str(repo_name)))
-
-            commits = extract_contributions(
-                os.path.join(CLONED_REPO_BASE_PATH, "fake_session_id", repo_name),
-                commit_limit=commit_limit,
-            )
+            commits = extract_contributions(os.path.join(CLONED_REPO_BASE_PATH, "fake_session_id", repo_name), commit_limit=commit_limit)
             save_commits_to_db(repo_name, commits)
-            return jsonify(commits), 200  # Added status code 200
-
-        except Exception as e:  # Catch any exception during git operations
-            logging.exception("Error during git operations in list_commits") # Log with traceback
+            return jsonify(commits), 200
+        except Exception as e:
+            logging.exception("Error during git operations in list_commits")
             return jsonify({"error": str(e)}), 500
-
 
     @app.route("/repos", methods=["POST"])
     def create_repo():
-        """
-        Create a new repository entry.
-        """
         data = request.json
         repo_name = data.get("repo_name")
-        url = data.get("url", "")  # Default to empty string if 'url' is not provided
-        description = data.get("description", "") # Default
-        comments = data.get("comments", "")  # Default
-
+        url = data.get("url", "")
+        organization = data.get("organization", None)  # Παίρνουμε τον οργανισμό από το request
+        description = data.get("description", "")
+        comments = data.get("comments", "")
         try:
-            save_repo_to_db(repo_name, url, description, comments)
+            # Περνάμε τον οργανισμό στη συνάρτηση αποθήκευσης
+            save_repo_to_db(repo_name, url, organization, description, comments)
             return jsonify({"message": "Repository created successfully"}), 201
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
     @app.route("/detected_kus", methods=["GET"])
     def get_detected_kus():
-        """
-        Retrieve detected KUs.
-        """
         try:
             kus_list = getdetected_kus()
             if kus_list is not None:
@@ -194,68 +198,50 @@ def init_routes(app):
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+    # --- ΑΛΛΑΓΗ ΕΔΩ ---
     @app.route("/repos/<string:repo_name>", methods=["PUT"])
     def edit_repo(repo_name):
-        """
-        Edit an existing repository entry.
-        """
         data = request.json
-        url = data.get("url", "") # Default
-        description = data.get("description", "")# Default
-        comments = data.get("comments", "")# Default
-
+        url = data.get("url", "")
+        organization = data.get("organization", None)  # Παίρνουμε τον οργανισμό από το request
+        description = data.get("description", "")
+        comments = data.get("comments", "")
         try:
-            save_repo_to_db(repo_name, url, description, comments)
+            # Περνάμε τον οργανισμό στη συνάρτηση αποθήκευσης
+            save_repo_to_db(repo_name, url, organization, description, comments)
             return jsonify({"message": "Repository updated successfully"}), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
     @app.route("/timestamps", methods=["GET"])
     def get_timestamps():
-        """
-        Retrieve timestamps for commits.
-        """
         try:
             repo_name = request.args.get("repo_name")
-
             if not repo_name:
                 return jsonify({"error": "Repository name is required"}), 400
-
             timestamps = get_commits_timestamps_from_db(repo_name)
-
             if timestamps is None:
                 return jsonify({"error": "Failed to retrieve timestamps"}), 500
-
             return jsonify(timestamps), 200
-
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
     @app.route("/historytime", methods=["GET"])
     def historytime():
-        """
-        Retrieve commit history timestamps.
-        """
         try:
             repo_url = request.args.get("repo_url")
             if not repo_url:
                 return jsonify({"error": "Missing 'repo_url' parameter"}), 400
-
             repo_name = repo_url.split("/")[-1].replace(".git", "")
             commit_history = get_history_repo(repo_url, repo_name, CLONED_REPO_BASE_PATH)
             commit_dates = [dt.strftime("%Y-%m-%d %H:%M:%S") for dt in commit_history]
             return jsonify({"repo_name": repo_name, "commit_dates": commit_dates}), 200
-
         except Exception as e:
-            logging.exception("Error in historytime") #Added logging
+            logging.exception("Error in historytime")
             return jsonify({"error": str(e)}), 500
-
 
     @app.route("/delete_repo/<string:repo_name>", methods=["DELETE"])
     def delete_repo(repo_name):
-        """
-        Delete a repository entry.
-        """
         try:
             delete_repo_from_db(repo_name)
             return jsonify({"message": f"Repository '{repo_name}' and related data deleted successfully"}), 200
@@ -264,9 +250,6 @@ def init_routes(app):
 
     @app.route("/repos", methods=["GET"])
     def list_repos():
-        """
-        List all repository entries.
-        """
         try:
             repos = get_all_repos_from_db()
             return jsonify(repos), 200
@@ -274,103 +257,161 @@ def init_routes(app):
             return jsonify({"error": str(e)}), 500
 
     # Configure logging
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    def start_analysis_in_background(repo_name, files):
-        analysis_thread = threading.Thread(
-            target=analyze_repository_background, args=(repo_name, files)
-        )
-        analysis_thread.start()
-
+    # --- ΑΛΛΑΓΗ 3: Το endpoint /analyze τώρα ξεκινάει την εργασία και επιστρέφει αμέσως ---
     @app.route("/analyze", methods=["GET"])
     def analyze():
-        """
-        Analyze a repository.
-        """
         repo_url = request.args.get("repo_url")
-
         if not repo_url:
             logging.error("No repository URL provided.")
             return jsonify({"error": "Repository URL is required"}), 400
 
         repo_name = repo_url.split("/")[-1].replace(".git", "")
-        logging.info(f"Starting analysis for repository: {repo_name}")
+        logging.info(f"Received analysis request for repository: {repo_name}")
+
+        # Έλεγχος αν μια ανάλυση ήδη τρέχει
+        current_status = get_analysis_status(repo_name)
+        if current_status and current_status.get('status') == 'in-progress':
+            logging.warning(f"Analysis for {repo_name} is already in progress.")
+            return jsonify({"message": "Analysis is already in progress for this repository."}), 409 # 409 Conflict
 
         commits = get_commits_from_db(repo_name)
-
         if not commits:
             logging.error(f"No commits found for repository: {repo_name}")
             return jsonify({"error": "No commits found for the repository"}), 400
 
         try:
             files = read_files_from_dict_list(commits)
-            logging.info(f"Retrieved {len(files)} files for analysis.")
-            return Response(
-                analyze_repository_background(repo_url, files), content_type="text/event-stream"
-            )
+            logging.info(f"Found {len(files)} files. Submitting analysis task to background executor.")
+
+            # Υποβάλλουμε την εργασία στον global executor
+            background_task_executor.submit(analyze_repository_task, repo_url, files, model)
+
+            # Επιστρέφουμε αμέσως μια απάντηση 202 Accepted
+            return jsonify({
+                "message": "Analysis started in the background.",
+                "repo_name": repo_name,
+                "status_endpoint": f"/analysis_status?repo_name={repo_name}"
+            }), 202
 
         except Exception as e:
-            logging.exception(f"Unexpected error during analysis for repository: {repo_name}")
-            return jsonify({"error": "An error occurred during analysis"}), 500
+            logging.exception(f"Failed to start analysis for repository: {repo_name}")
+            return jsonify({"error": "An error occurred while trying to start the analysis"}), 500
 
+    # --- ΑΛΛΑΓΗ 4: Αυτό το endpoint γίνεται τώρα ΠΟΛΥ ΣΗΜΑΝΤΙΚΟ ---
+    # Το front-end θα το καλεί για να παίρνει ενημερώσεις.
     @app.route("/analysis_status", methods=["GET"])
     def analysis_status_endpoint():
-        """
-        Get analysis status for a repository.
-        """
         repo_name = request.args.get("repo_name")
-
         if not repo_name:
             return jsonify({"error": "Repository name is required"}), 400
-
         status_info = get_analysis_status(repo_name)
-
         if status_info:
             return jsonify(status_info), 200
         else:
-            return jsonify({"status": "not found"}), 404
+            # Είναι καλό να επιστρέφουμε μια κατάσταση 'not_started' αντί για 404
+            return jsonify({"status": "not_started", "progress": 0}), 200
 
     @app.route("/analyzedb", methods=["GET"])
     def analyzedb():
-        """
-        Get analysis data from the database.
-        """
         try:
             repo_name = request.args.get("repo_name")
-
             if not repo_name:
                 return jsonify({"error": "repo_name parameter is required"}), 400
-
             analysis_data = get_analysis_from_db(repo_name)
-
             if analysis_data is None:
                 return jsonify({"error": "Failed to retrieve analysis data"}), 500
-
             return jsonify(analysis_data), 200
-
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
     @app.route("/analyzeall", methods=["GET"])
     def analyzeall():
-        """
-        Get all analysis data.
-        """
         try:
             analysis_data = get_allanalysis_from_db()
-
             if analysis_data is None:
                 return jsonify({"error": "Failed to retrieve all analysis data"}), 500
-
             return jsonify(analysis_data), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
 
-init_routes(app)  # Call init_routes AFTER defining it
+    # --- ΝΕΟ ENDPOINT ΓΙΑ ΤΑ ΣΤΑΤΙΣΤΙΚΑ ΤΩΝ KUs ---
+    @app.route("/ku_statistics", methods=["GET"])
+    def get_ku_statistics():
+        """
+        Επιστρέφει μια λίστα με όλα τα μοναδικά KUs και το πλήθος
+        των εμφανίσεών τους σε όλα τα projects.
+        """
+        try:
+            # Κάλεσε τη νέα συνάρτηση που έφτιαξες στο data_db.py
+            ku_counts = get_ku_counts_from_db()
+
+            if ku_counts is not None:
+                # Αν όλα πήγαν καλά, στείλε τα δεδομένα ως JSON
+                return jsonify(ku_counts), 200
+            else:
+                # Αν η συνάρτηση επέστρεψε None (π.χ. λόγω σφάλματος)
+                return jsonify({"error": "Failed to retrieve KU statistics"}), 500
+        except Exception as e:
+            # Γενικό σφάλμα
+            logging.exception("Error in /ku_statistics endpoint")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/organization_stats", methods=["GET"])
+    def get_organization_statistics():
+        """
+        Επιστρέφει μια λίστα με τα ονόματα των οργανισμών (π.χ. 'apache')
+        και τον αριθμό των projects που έχουμε αποθηκευμένα για τον καθένα.
+        """
+        try:
+            # Κάλεσε τη νέα συνάρτηση από το data_db.py
+            org_counts = get_organization_project_counts()
+
+            if org_counts is not None:
+                return jsonify(org_counts), 200
+            else:
+                return jsonify({"error": "Failed to retrieve organization statistics"}), 500
+        except Exception as e:
+            logging.exception("Error in /organization_stats endpoint")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/ku_by_organization", methods=["GET"])
+    def get_ku_by_organization_stats():
+        """
+        Επιστρέφει μια λίστα οργανισμών, και για τον καθένα, μια λίστα
+        με τα KUs που εντοπίστηκαν στα projects του και το πλήθος τους.
+        """
+        try:
+            data = get_ku_counts_by_organization()
+            if data is not None:
+                return jsonify(data), 200
+            else:
+                return jsonify({"error": "Failed to retrieve KU statistics by organization"}), 500
+        except Exception as e:
+            logging.exception("Error in /ku_by_organization endpoint")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/monthly_analysis_stats", methods=["GET"])
+    def get_monthly_analysis_statistics():
+        """
+        Επιστρέφει μια λίστα οργανισμών, και για τον καθένα, το πλήθος
+        των αναλύσεων που έγιναν ανά μήνα στα projects του.
+        """
+        try:
+            data = get_monthly_analysis_counts_by_org()
+            if data is not None:
+                return jsonify(data), 200
+            else:
+                return jsonify({"error": "Failed to retrieve monthly analysis statistics"}), 500
+        except Exception as e:
+            logging.exception("Error in /monthly_analysis_stats endpoint")
+            return jsonify({"error": str(e)}), 500
+
+
+init_routes(app)
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # Για production, θα χρησιμοποιούσες έναν WSGI server όπως Gunicorn ή uWSGI
+    app.run(debug=True, host='0.0.0.0', port=5000)
