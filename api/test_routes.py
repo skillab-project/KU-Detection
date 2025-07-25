@@ -11,10 +11,11 @@ import logging
 logging.disable(logging.CRITICAL)
 
 # Προσθήκη του γονικού φακέλου στο sys.path για να βρει τα modules
-#sys.path.append(os.path.abspath(os.getcwd()))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from api.routes import init_routes
 from core.ml_operations.loader import load_codebert_model
+
 
 class FlaskAPITests(unittest.TestCase):
 
@@ -22,7 +23,7 @@ class FlaskAPITests(unittest.TestCase):
         self.app = Flask(__name__)  # Δημιουργία test Flask app
         # Mocking του load_codebert_model, ωστε να μην το φορτώνουμε κατά τα tests
         with patch('core.ml_operations.loader.load_codebert_model') as mock_load_model:
-            mock_load_model.return_value = MagicMock() # Επιστρέφει ένα mock object
+            mock_load_model.return_value = MagicMock()  # Επιστρέφει ένα mock object
             init_routes(self.app)  # Αρχικοποίηση routes στο *test* app
 
         self.client = self.app.test_client()
@@ -65,12 +66,11 @@ class FlaskAPITests(unittest.TestCase):
         mock_extract.assert_called_once()
         mock_save_commits.assert_called_once()
 
-
         # Σενάριο 2: Το repo υπάρχει -> pull
         mock_repo_exists.return_value = True
         mock_extract.return_value = self.sample_commits
         mock_save_commits.return_value = None
-        mock_pull.reset_mock() # Reset Mock
+        mock_pull.reset_mock()  # Reset Mock
         mock_extract.reset_mock()
         mock_save_commits.reset_mock()
 
@@ -81,7 +81,6 @@ class FlaskAPITests(unittest.TestCase):
         mock_pull.assert_called_once()
         mock_extract.assert_called_once()
         mock_save_commits.assert_called_once()
-
 
     @patch('api.routes.save_repo_to_db')
     def test_create_repo(self, mock_save_repo):
@@ -107,18 +106,19 @@ class FlaskAPITests(unittest.TestCase):
         data = json.loads(response.data)
         self.assertEqual(data["message"], "Repository created successfully")
         mock_save_repo.assert_called_once_with(
-            self.sample_repo_name, self.sample_repo_url, "Test repo", "Test comment"
+            self.sample_repo_name, self.sample_repo_url, None, "Test repo", "Test comment"
         )
 
         # Test with exception
         mock_save_repo.side_effect = Exception("Database error")
         response = self.client.post('/repos',
-                                    json={"repo_name": self.sample_repo_name, "url":self.sample_repo_url, "description": "Test repo", "comments": "Test comment"}) # Πρέπει να περιέχει όλα τα πεδία
+                                    json={"repo_name": self.sample_repo_name, "url": self.sample_repo_url,
+                                          "description": "Test repo",
+                                          "comments": "Test comment"})  # Πρέπει να περιέχει όλα τα πεδία
         self.assertEqual(response.status_code, 500)
         data = json.loads(response.data)
         self.assertIn("error", data)
         mock_save_repo.side_effect = None
-
 
     @patch('api.routes.getdetected_kus')
     def test_get_detected_kus(self, mock_get_kus):
@@ -130,7 +130,8 @@ class FlaskAPITests(unittest.TestCase):
         Related methods: app.getdetected_kus
         """
         # Test successful retrieval
-        mock_get_kus.return_value = [{'author': 'author1', 'kus': ['KU1', 'KU2']}, {'author': 'author2', 'kus': ['KU3']}]
+        mock_get_kus.return_value = [{'author': 'author1', 'kus': ['KU1', 'KU2']},
+                                     {'author': 'author2', 'kus': ['KU3']}]
 
         response = self.client.get('/detected_kus')
         self.assertEqual(response.status_code, 200)
@@ -172,13 +173,14 @@ class FlaskAPITests(unittest.TestCase):
         data = json.loads(response.data)
         self.assertEqual(data["message"], "Repository updated successfully")
         mock_save_repo.assert_called_once_with(
-            self.sample_repo_name, self.sample_repo_url, "Updated description", "Updated comment"
+            self.sample_repo_name, self.sample_repo_url, None, "Updated description", "Updated comment"
         )
 
         # Test with exception
         mock_save_repo.side_effect = Exception("Database error")
         response = self.client.put(f'/repos/{self.sample_repo_name}',
-                                   json={"url": self.sample_repo_url,  "description": "Updated description", "comments": "Updated comment"}) # Πρέπει να περιέχει όλα τα πεδία
+                                   json={"url": self.sample_repo_url, "description": "Updated description",
+                                         "comments": "Updated comment"})  # Πρέπει να περιέχει όλα τα πεδία
         self.assertEqual(response.status_code, 500)
         mock_save_repo.side_effect = None
 
@@ -248,7 +250,6 @@ class FlaskAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         mock_get_history.side_effect = None
 
-
     @patch('api.routes.delete_repo_from_db')
     def test_delete_repo(self, mock_delete_repo):
         """
@@ -270,7 +271,7 @@ class FlaskAPITests(unittest.TestCase):
         response = self.client.delete(f'/delete_repo/{self.sample_repo_name}')
         data = json.loads(response.data)
         self.assertEqual(response.status_code, 500)
-        self.assertEqual(data.get("error"), "Database connection error") # Έλεγχος για το μύνημα
+        self.assertEqual(data.get("error"), "Database connection error")  # Έλεγχος για το μύνημα
         mock_delete_repo.side_effect = None
 
     @patch('api.routes.get_all_repos_from_db')
@@ -283,8 +284,12 @@ class FlaskAPITests(unittest.TestCase):
         Related methods: app.get_all_repos_from_db
         """
         mock_repos = [
-            {"name": "Test Repo 1", "url": "testurl1", "description": "", "comments": "", "created_at": "", "updated_at": "", "analysis_status": "", "analysis_start_time": "", "analysis_end_time": "", "analysis_progress": "", "analysis_error_message":""},
-            {"name": "Test Repo 2", "url": "testurl2", "description": "", "comments": "", "created_at": "", "updated_at": "", "analysis_status": "", "analysis_start_time": "", "analysis_end_time": "", "analysis_progress": "", "analysis_error_message":""}
+            {"name": "Test Repo 1", "url": "testurl1", "organization": None, "description": "", "comments": "",
+             "created_at": None, "updated_at": None, "analysis_status": None, "analysis_start_time": None,
+             "analysis_end_time": None, "analysis_progress": None, "analysis_error_message": None},
+            {"name": "Test Repo 2", "url": "testurl2", "organization": None, "description": "", "comments": "",
+             "created_at": None, "updated_at": None, "analysis_status": None, "analysis_start_time": None,
+             "analysis_end_time": None, "analysis_progress": None, "analysis_error_message": None}
         ]
         mock_get_all_repos.return_value = mock_repos
         response = self.client.get('/repos')
@@ -302,38 +307,50 @@ class FlaskAPITests(unittest.TestCase):
         self.assertEqual(data['error'], 'Database error')
         mock_get_all_repos.side_effect = None
 
-    @patch('api.routes.analyze_repository_background')
-    @patch('api.routes.get_commits_from_db')
+    @patch('api.routes.background_task_executor.submit')
     @patch('api.routes.read_files_from_dict_list')
-    def test_analyze_endpoint(self, mock_read_files, mock_get_commits, mock_analyze_background):
+    @patch('api.routes.get_commits_from_db')
+    @patch('api.routes.get_analysis_status')
+    def test_analyze_endpoint(self, mock_get_status, mock_get_commits, mock_read_files, mock_submit):
         """
-        Title: Testing repository code analysis functionality
-        Description: This test verifies that the /analyze endpoint correctly initiates and
-        streams the progress of code analysis for a specified repository. It tests parameter
-        validation, handling of empty commit lists, and proper error handling during file
-        reading operations.
-        Related methods: app.get_commits_from_db, app.read_files_from_dict_list,
-        app.analyze_repository_background
+        Title: Testing repository code analysis functionality (NEW ASYNC LOGIC)
+        Description: This test verifies that the /analyze endpoint correctly initiates a background task
+        and handles various scenarios like missing parameters or an already running analysis.
+        Related methods: get_analysis_status, get_commits_from_db, read_files_from_dict_list, background_task_executor.submit
         """
-        mock_commits = [
-            {"commit": "123", "author": "test", "filename": "test_filename.py", "timestamp": datetime.datetime.now(), "sha": "test_sha"}]
-        mock_files = {"test_filename.py": MagicMock(filename="test_filename.py", author="test_author", timestamp=datetime.datetime.now().isoformat(), sha="test_sha", ku_results=[{"ku": "KU1"}])}
-
-        mock_get_commits.return_value = mock_commits
-        mock_read_files.return_value = mock_files
-        mock_analyze_background.return_value = iter([b'data: {"progress": 100}\n\n'])
+        # --- Scenario 1: Successful start of analysis ---
+        mock_get_status.return_value = None  # No analysis is currently running
+        mock_get_commits.return_value = self.sample_commits
+        mock_read_files.return_value = {"file1.py": MagicMock()}
 
         response = self.client.get(f'/analyze?repo_url={self.sample_repo_url}')
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content_type, 'text/event-stream')
+        self.assertEqual(response.status_code, 202)  # 202 Accepted is the correct response
+        data = json.loads(response.data)
+        self.assertEqual(data['message'], 'Analysis started in the background.')
+        expected_repo_name = self.sample_repo_url.split("/")[-1].replace(".git", "")
+        self.assertEqual(data['repo_name'], expected_repo_name)
+        mock_submit.assert_called_once()  # Verify that the task was submitted
 
-        # Test with no repo_url (should return 400)
+        # --- Scenario 2: Missing repo_url parameter ---
         response = self.client.get('/analyze')
         self.assertEqual(response.status_code, 400)
         data = json.loads(response.data)
         self.assertEqual(data['error'], 'Repository URL is required')
 
+        # --- Scenario 3: Analysis already in progress ---
+        mock_get_status.return_value = {'status': 'in-progress'}
+        response = self.client.get(f'/analyze?repo_url={self.sample_repo_url}')
+        self.assertEqual(response.status_code, 409)  # 409 Conflict
+        data = json.loads(response.data)
+        self.assertEqual(data['message'], 'Analysis is already in progress for this repository.')
 
+        # --- Scenario 4: No commits found for the repository ---
+        mock_get_status.return_value = None  # Reset status
+        mock_get_commits.return_value = []  # No commits found
+        response = self.client.get(f'/analyze?repo_url={self.sample_repo_url}')
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.data)
+        self.assertEqual(data['error'], 'No commits found for the repository')
 
     @patch('api.routes.get_analysis_status')
     def test_analysis_status_endpoint(self, mock_get_status):
@@ -368,8 +385,9 @@ class FlaskAPITests(unittest.TestCase):
         # Test with no status found
         mock_get_status.return_value = None
         response = self.client.get(f'/analysis_status?repo_name={self.sample_repo_name}')
-        self.assertEqual(response.status_code, 404)
-
+        self.assertEqual(response.status_code, 200)  # CORRECT: Should return 200 with default status
+        data = json.loads(response.data)
+        self.assertEqual(data, {"status": "not_started", "progress": 0})
 
     @patch('api.routes.get_analysis_from_db')
     def test_analyzedb_endpoint(self, mock_get_analysis):
@@ -383,8 +401,10 @@ class FlaskAPITests(unittest.TestCase):
         """
         # Mock data
         analysis_data = [
-            {"filename": "file1.py", "detected_kus": ["KU1", "KU2"], "author":"", "timestamp": None, "sha":"", "elapsed_time":""},
-            {"filename": "file2.py", "detected_kus": ["KU3"], "author":"", "timestamp":None, "sha":"", "elapsed_time":""}
+            {"filename": "file1.py", "detected_kus": ["KU1", "KU2"], "author": "", "timestamp": None, "sha": "",
+             "elapsed_time": ""},
+            {"filename": "file2.py", "detected_kus": ["KU3"], "author": "", "timestamp": None, "sha": "",
+             "elapsed_time": ""}
         ]
 
         # Test successful retrieval
@@ -443,6 +463,89 @@ class FlaskAPITests(unittest.TestCase):
         response = self.client.get('/analyzeall')
         self.assertEqual(response.status_code, 500)
         mock_get_all_analysis.side_effect = None
+
+    @patch('api.routes.get_ku_counts_from_db')
+    def test_get_ku_statistics(self, mock_get_counts):
+        """
+        Title: Testing KU statistics endpoint
+        """
+        mock_data = [{"ku_id": "KU_1", "count": 15}, {"ku_id": "KU_2", "count": 10}]
+        mock_get_counts.return_value = mock_data
+
+        response = self.client.get('/ku_statistics')
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertEqual(data, mock_data)
+
+        # Test with exception
+        mock_get_counts.side_effect = Exception("DB Error")
+        response = self.client.get('/ku_statistics')
+        self.assertEqual(response.status_code, 500)
+        mock_get_counts.side_effect = None
+
+    @patch('api.routes.get_organization_project_counts')
+    def test_get_organization_statistics(self, mock_get_counts):
+        """
+        Title: Testing organization statistics endpoint
+        """
+        mock_data = [{"organization": "apache", "count": 5}, {"organization": "google", "count": 3}]
+        mock_get_counts.return_value = mock_data
+
+        response = self.client.get('/organization_stats')
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertEqual(data, mock_data)
+
+        # Test with exception
+        mock_get_counts.side_effect = Exception("DB Error")
+        response = self.client.get('/organization_stats')
+        self.assertEqual(response.status_code, 500)
+        mock_get_counts.side_effect = None
+
+    @patch('api.routes.get_ku_counts_by_organization')
+    def test_get_ku_by_organization_stats(self, mock_get_data):
+        """
+        Title: Testing KU statistics by organization endpoint
+        """
+        mock_data = [{
+            "organization": "apache",
+            "ku_counts": [{"ku_id": "KU_1", "count": 10}]
+        }]
+        mock_get_data.return_value = mock_data
+
+        response = self.client.get('/ku_by_organization')
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertEqual(data, mock_data)
+
+        # Test with exception
+        mock_get_data.side_effect = Exception("DB Error")
+        response = self.client.get('/ku_by_organization')
+        self.assertEqual(response.status_code, 500)
+        mock_get_data.side_effect = None
+
+    @patch('api.routes.get_monthly_analysis_counts_by_org')
+    def test_get_monthly_analysis_statistics(self, mock_get_data):
+        """
+        Title: Testing monthly analysis statistics endpoint
+        """
+        mock_data = [{
+            "organization": "apache",
+            "monthly_counts": [{"month": "2024-05", "count": 100}]
+        }]
+        mock_get_data.return_value = mock_data
+
+        response = self.client.get('/monthly_analysis_stats')
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertEqual(data, mock_data)
+
+        # Test with exception
+        mock_get_data.side_effect = Exception("DB Error")
+        response = self.client.get('/monthly_analysis_stats')
+        self.assertEqual(response.status_code, 500)
+        mock_get_data.side_effect = None
+
 
 if __name__ == '__main__':
     unittest.main()
