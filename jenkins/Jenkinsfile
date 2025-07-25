@@ -49,7 +49,6 @@ pipeline {
 							python -m unittest discover
 						"
 				'''
-                
             }
         }
         
