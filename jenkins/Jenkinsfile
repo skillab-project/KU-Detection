@@ -66,9 +66,6 @@ pipeline {
         // *** Push Images In Harbor ***
         // ****************************
         stage("Push_Image"){
-            when {
-                branch 'main'
-            }
             steps {
                 withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: "${DOCKER_REG_CREDS}", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]){
                     echo "***** Push Docker Image *****"
@@ -85,9 +82,6 @@ pipeline {
         // *** Deploy ***
         // **************
         stage("Deployment"){
-            when {
-                branch 'main'
-            }
             steps {
                 withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: "${DOCKER_REG_CREDS}", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]){
                     echo "***** Deploy Application *****"
