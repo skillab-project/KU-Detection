@@ -8,7 +8,11 @@ import logging
 from core.ml_operations.loader import load_codebert_model
 from core.analysis.codebert_sliding_window import codebert_sliding_window
 from config.settings import CLONED_REPO_BASE_PATH, CODEBERT_BASE_PATH
-
+import pandas as pd
+import numpy as np
+from sklearn.cluster import KMeans
+from collections import defaultdict
+from core.ml_operations.loader import load_codebert_model
 
 # Database connection settings
 load_dotenv()
@@ -750,4 +754,99 @@ def get_monthly_analysis_counts_by_org():
         if 'conn' in locals() and conn is not None:
             conn.close()
 
+def get_kus_per_repository():
+    """
+    Ανακτά όλα τα μοναδικά KUs για κάθε repository από τον πίνακα analysis_results.
+    Επιστρέφει ένα λεξικό όπου τα κλειδιά είναι τα ονόματα των repositories
+    και οι τιμές είναι ένα set με τα KUs που βρέθηκαν σε αυτό (π.χ. 'K1', 'K5').
+    """
+    # Το query διατρέχει τα JSONB αντικείμενα και παίρνει τα κλειδιά (ku_id)
+    # μόνο όταν η τιμή τους είναι '1'.
+    sql_query = """
+        SELECT
+            repo_name,
+            ku.key AS ku_id
+        FROM
+            analysis_results,
+            LATERAL jsonb_each_text(detected_kus) AS ku
+        WHERE
+            ku.value = '1'
+        GROUP BY
+            repo_name, ku_id;
+    """
+    repos_with_kus = defaultdict(set)
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(sql_query)
+        rows = cur.fetchall()
+        cur.close()
 
+        for repo_name, ku_id in rows:
+            repos_with_kus[repo_name].add(ku_id)
+
+        return dict(repos_with_kus)
+
+    except Exception as e:
+        logging.error(f"An error occurred while getting KUs per repository: {e}")
+        return None
+    finally:
+        if 'conn' in locals() and conn is not None:
+            conn.close()
+
+
+def cluster_repositories_by_kus(num_clusters: int):
+    """
+    Ομαδοποιεί τα repositories χρησιμοποιώντας τον αλγόριθμο K-Means
+    με βάση τα KUs που περιέχουν.
+
+    Args:
+        num_clusters (int): Ο επιθυμητός αριθμός των clusters.
+
+    Returns:
+        list: Μια λίστα από λεξικά, όπου κάθε λεξικό περιέχει το όνομα
+              του repository και το cluster στο οποίο ανήκει.
+              Επιστρέφει None σε περίπτωση σφάλματος.
+    """
+    try:
+        # 1. Ανάκτηση των KUs για κάθε repository
+        repos_data = get_kus_per_repository()
+        if not repos_data or len(repos_data) < num_clusters:
+            # Σημαντικός έλεγχος: Δεν μπορούμε να φτιάξουμε περισσότερα clusters από όσα repositories έχουμε.
+            raise ValueError("Not enough repositories with detected KUs to form the requested number of clusters.")
+
+        repo_names = list(repos_data.keys())
+
+        # 2. Δημιουργία ενός "feature vector" για κάθε repository
+        # Βρίσκουμε όλα τα μοναδικά KUs που υπάρχουν συνολικά σε όλα τα repos.
+        all_kus = sorted(list(set.union(*repos_data.values())))
+
+        # Δημιουργία ενός DataFrame (πίνακα) με pandas:
+        # Γραμμές: repositories, Στήλες: KUs, Τιμές: 1 (αν υπάρχει) ή 0 (αν δεν υπάρχει).
+        df = pd.DataFrame(0, index=repo_names, columns=all_kus, dtype=np.int8)
+        for repo, kus in repos_data.items():
+            df.loc[repo, list(kus)] = 1
+
+        # 3. Εκτέλεση του K-Means
+        # Χρησιμοποιούμε n_init='auto' για να αποφύγουμε μελλοντικά warnings.
+        # Το random_state εξασφαλίζει ότι τα αποτελέσματα θα είναι ίδια σε κάθε εκτέλεση.
+        kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init='auto')
+        kmeans.fit(df)
+
+        # 4. Αντιστοίχιση των labels (clusters) στα repositories και δημιουργία της απάντησης
+        results = []
+        for repo_name, cluster_label in zip(repo_names, kmeans.labels_):
+            results.append({
+                "repo_name": repo_name,
+                "cluster": int(cluster_label)  # Μετατροπή σε standard Python int για σωστή JSON μορφοποίηση
+            })
+
+        return results
+
+    except ValueError as ve:
+        # Ειδικός χειρισμός για το σφάλμα που δημιουργήσαμε παραπάνω
+        logging.warning(f"Clustering validation error: {ve}")
+        raise ve  # Το ξαναπετάμε για να το πιάσει το route και να στείλει σωστό status code
+    except Exception as e:
+        logging.exception(f"An unexpected error occurred during K-Means clustering: {e}")
+        return None
