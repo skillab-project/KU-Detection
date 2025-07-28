@@ -5,9 +5,119 @@
     "version": "1.0.0",
     "description": "API for the KU-Detection-Back-End project."
   },
+  "tags": [
+    {
+      "name": "Clustering",
+      "description": "Endpoints for performing data clustering."
+    },
+    {
+      "name": "Repository Management",
+      "description": "Endpoints for creating, listing, and managing repositories."
+    },
+    {
+      "name": "Analysis",
+      "description": "Endpoints for running and retrieving analysis results."
+    },
+    {
+      "name": "Statistics",
+      "description": "Endpoints for retrieving aggregated statistics."
+    }
+  ],
   "paths": {
+    "/cluster_repos": {
+      "post": {
+        "tags": [
+          "Clustering"
+        ],
+        "summary": "Cluster Repositories by KUs",
+        "description": "Performs K-Means clustering on repositories based on their detected Knowledge Units (KUs). The number of clusters is specified in the request body.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "num_clusters"
+                ],
+                "properties": {
+                  "num_clusters": {
+                    "type": "integer",
+                    "description": "The desired number of clusters to create. Must be 2 or greater.",
+                    "example": 3,
+                    "minimum": 2
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Clustering performed successfully. Returns a list of repositories with their assigned cluster ID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "repo_name": {
+                        "type": "string",
+                        "description": "The name of the repository.",
+                        "example": "kafka-python"
+                      },
+                      "cluster": {
+                        "type": "integer",
+                        "description": "The ID of the cluster the repository belongs to.",
+                        "example": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request. The 'num_clusters' parameter is missing, not an integer, less than 2, or there are not enough repositories to form the requested clusters.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Not enough repositories with detected KUs to form the requested number of clusters."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An internal error occurred during the clustering process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Failed to perform clustering due to an internal error"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/commits": {
       "post": {
+        "tags": [
+          "Repository Management"
+        ],
         "summary": "Get Commits",
         "description": "Retrieves a list of commits from a specified repository.",
         "requestBody": {
@@ -64,6 +174,9 @@
     },
     "/repos": {
       "post": {
+        "tags": [
+          "Repository Management"
+        ],
         "summary": "Create Repository",
         "description": "Creates a new repository entry.",
         "requestBody": {
@@ -141,6 +254,9 @@
         }
       },
       "get": {
+        "tags": [
+          "Repository Management"
+        ],
         "summary": "List Repositories",
         "description": "Lists all repository entries",
         "responses": {
@@ -189,6 +305,9 @@
     },
     "/detected_kus": {
       "get": {
+        "tags": [
+          "Analysis"
+        ],
         "summary": "Get Detected KUs",
         "description": "Retrieves detected KUs.",
         "responses": {
@@ -239,6 +358,9 @@
     },
     "/repos/{repo_name}": {
       "put": {
+        "tags": [
+          "Repository Management"
+        ],
         "summary": "Edit Repository",
         "description": "Edits an existing repository entry.",
         "parameters": [
@@ -324,6 +446,9 @@
     },
     "/timestamps": {
       "get": {
+        "tags": [
+          "Analysis"
+        ],
         "summary": "Get Commits Timestamps",
         "description": "Retrieve commits timestampts.",
         "parameters": [
@@ -385,6 +510,9 @@
     },
     "/historytime": {
       "get": {
+        "tags": [
+          "Repository Management"
+        ],
         "summary": "Get Repository History Time",
         "description": "Retrieves repository history",
         "parameters": [
@@ -443,6 +571,9 @@
     },
     "/delete_repo/{repo_name}": {
       "delete": {
+        "tags": [
+          "Repository Management"
+        ],
         "summary": "Delete Repository",
         "description": "Delete a repository entry",
         "parameters": [
@@ -494,6 +625,9 @@
     },
     "/analyze": {
       "get": {
+        "tags": [
+          "Analysis"
+        ],
         "summary": "Analyze a Repository",
         "description": "Analyze a repository",
         "parameters": [
@@ -548,6 +682,9 @@
     },
     "/analysis_status": {
       "get": {
+        "tags": [
+          "Analysis"
+        ],
         "summary": "Analysis Status",
         "description": "Analisis Status",
         "parameters": [
@@ -602,6 +739,9 @@
     },
     "/analyzedb": {
       "get": {
+        "tags": [
+          "Analysis"
+        ],
         "summary": "Analyzed DB",
         "description": "Analyzed DB",
         "parameters": [
@@ -663,6 +803,9 @@
     },
     "/analyzeall": {
       "get": {
+        "tags": [
+          "Analysis"
+        ],
         "summary": "All Analysis",
         "description": "Gets all analysis from the db",
         "responses": {
