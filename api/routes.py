@@ -28,6 +28,7 @@ from api.data_db import (
     get_organization_project_counts,
     get_ku_counts_by_organization,
     get_monthly_analysis_counts_by_org,
+    cluster_repositories_by_kus,
 )
 from core.git_operations import clone_repo, repo_exists, extract_contributions
 from core.git_operations.repo import pull_repo, get_history_repo
@@ -408,6 +409,41 @@ def init_routes(app):
         except Exception as e:
             logging.exception("Error in /monthly_analysis_stats endpoint")
             return jsonify({"error": str(e)}), 500
+
+    @app.route("/cluster_repos", methods=["POST"])
+    def cluster_repos():
+        """
+        Εκτελεί ομαδοποίηση K-Means στα repositories με βάση τα KUs τους.
+        Δέχεται ένα JSON body με το κλειδί 'num_clusters'.
+        Example: {"num_clusters": 5}
+        """
+        data = request.get_json()
+        if not data or "num_clusters" not in data:
+            return jsonify({"error": "Missing 'num_clusters' in request body"}), 400
+
+        try:
+            num_clusters = int(data["num_clusters"])
+            if num_clusters < 2:
+                return jsonify({"error": "Number of clusters must be at least 2"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"error": "'num_clusters' must be an integer"}), 400
+
+        try:
+            # Κάλεσε τη νέα συνάρτηση που εκτελεί την ομαδοποίηση
+            clustered_data = cluster_repositories_by_kus(num_clusters)
+
+            if clustered_data is not None:
+                return jsonify(clustered_data), 200
+            else:
+                # Γενικό σφάλμα αν η συνάρτηση επέστρεψε None για άγνωστο λόγο
+                return jsonify({"error": "Failed to perform clustering due to an internal error"}), 500
+
+        except ValueError as ve:
+            # Πιάνει το σφάλμα για λίγα repositories (π.χ. ζητάς 5 clusters ενώ έχεις μόνο 3 repos)
+            return jsonify({"error": str(ve)}), 400
+        except Exception as e:
+            logging.exception("Error in /cluster_repos endpoint")
+            return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
 
 init_routes(app)
