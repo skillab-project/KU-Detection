@@ -14,6 +14,7 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from collections import defaultdict
 from core.ml_operations.loader import load_codebert_model
+from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.decomposition import PCA
 # Database connection settings
 load_dotenv()
@@ -755,18 +756,17 @@ def get_monthly_analysis_counts_by_org():
         if 'conn' in locals() and conn is not None:
             conn.close()
 
-def get_kus_per_repository():
+def get_ku_counts_per_repository():
     """
-    Ανακτά όλα τα μοναδικά KUs για κάθε repository από τον πίνακα analysis_results.
-    Επιστρέφει ένα λεξικό όπου τα κλειδιά είναι τα ονόματα των repositories
-    και οι τιμές είναι ένα set με τα KUs που βρέθηκαν σε αυτό (π.χ. 'K1', 'K5').
+    Ανακτά το πλήθος των commits για κάθε KU, ομαδοποιημένο ανά repository.
+    Επιστρέφει ένα λεξικό της μορφής:
+    { 'repo_name_1': {'KU1': 10, 'KU5': 3}, 'repo_name_2': {'KU1': 5, 'KU8': 12} }
     """
-    # Το query διατρέχει τα JSONB αντικείμενα και παίρνει τα κλειδιά (ku_id)
-    # μόνο όταν η τιμή τους είναι '1'.
     sql_query = """
         SELECT
             repo_name,
-            ku.key AS ku_id
+            ku.key AS ku_id,
+            COUNT(*) as ku_count
         FROM
             analysis_results,
             LATERAL jsonb_each_text(detected_kus) AS ku
@@ -775,7 +775,7 @@ def get_kus_per_repository():
         GROUP BY
             repo_name, ku_id;
     """
-    repos_with_kus = defaultdict(set)
+    repos_with_ku_counts = defaultdict(dict)
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -783,65 +783,60 @@ def get_kus_per_repository():
         rows = cur.fetchall()
         cur.close()
 
-        for repo_name, ku_id in rows:
-            repos_with_kus[repo_name].add(ku_id)
+        for repo_name, ku_id, ku_count in rows:
+            repos_with_ku_counts[repo_name][ku_id] = ku_count
 
-        return dict(repos_with_kus)
+        return dict(repos_with_ku_counts)
 
     except Exception as e:
-        logging.error(f"An error occurred while getting KUs per repository: {e}")
+        logging.error(f"An error occurred while getting KU counts per repository: {e}")
         return None
     finally:
         if 'conn' in locals() and conn is not None:
             conn.close()
 
-# data_db.py
 
 def cluster_repositories_by_kus(num_clusters: int):
     """
-    Ομαδοποιεί τα repositories χρησιμοποιώντας K-Means και μειώνει τις διαστάσεις
-    χρησιμοποιώντας PCA για 2D οπτικοποίηση.
-
-    Args:
-        num_clusters (int): Ο επιθυμητός αριθμός των clusters.
-
-    Returns:
-        list: Μια λίστα από λεξικά. Κάθε λεξικό περιέχει το όνομα του repo,
-              το cluster του, και τις 2D συντεταγμένες του (x, y).
+    Ομαδοποιεί τα repositories χρησιμοποιώντας K-Means πάνω σε TF-IDF-weighted KU counts
+    και μειώνει τις διαστάσεις με PCA για 2D οπτικοποίηση.
     """
     try:
-        # 1. Ανάκτηση των KUs για κάθε repository (παραμένει το ίδιο)
-        repos_data = get_kus_per_repository()
+        # 1. Ανάκτηση του πλήθους των KUs για κάθε repository
+        repos_data = get_ku_counts_per_repository() # <--- ΣΩΣΤΗ ΚΛΗΣΗ
         if not repos_data or len(repos_data) < num_clusters:
             raise ValueError("Not enough repositories with detected KUs to form the requested number of clusters.")
 
         repo_names = list(repos_data.keys())
 
-        # 2. Δημιουργία του πίνακα χαρακτηριστικών (feature vector) (παραμένει το ίδιο)
-        all_kus = sorted(list(set.union(*repos_data.values())))
-        df = pd.DataFrame(0, index=repo_names, columns=all_kus, dtype=np.int8)
-        for repo, kus in repos_data.items():
-            df.loc[repo, list(kus)] = 1
+        # 2. Δημιουργία του πίνακα χαρακτηριστικών (με ακατέργαστα counts)
+        all_kus = sorted(list(set.union(*(set(d.keys()) for d in repos_data.values()))))
+        df = pd.DataFrame(0, index=repo_names, columns=all_kus, dtype=np.int32)
+        for repo, ku_counts in repos_data.items():
+            for ku, count in ku_counts.items():
+                df.loc[repo, ku] = count
 
-        # 3. Εκτέλεση του K-Means (παραμένει το ίδιο)
+        # 3. Μετατροπή των ακατέργαστων counts σε σταθμισμένα scores με TF-IDF
+        tfidf_transformer = TfidfTransformer()
+        tfidf_matrix = tfidf_transformer.fit_transform(df)
+
+        # 4. Εκτέλεση του K-Means πάνω στα σταθμισμένα δεδομένα
         kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init='auto')
-        cluster_labels = kmeans.fit_predict(df)
+        cluster_labels = kmeans.fit_predict(tfidf_matrix)
 
-        # --- ΝΕΟ ΒΗΜΑ: Μείωση διαστάσεων με PCA ---
-        # 4. Μετατροπή των πολυσδιάστατων δεδομένων σε 2D συντεταγμένες
+        # 5. Μείωση διαστάσεων με PCA πάνω στα σταθμισμένα δεδομένα
         pca = PCA(n_components=2, random_state=42)
-        coordinates_2d = pca.fit_transform(df)
-        # -------------------------------------------
+        coordinates_2d = pca.fit_transform(tfidf_matrix.toarray())
 
-        # 5. Σύνθεση της τελικής απάντησης με τις νέες συντεταγμένες
+        # 6. Σύνθεση της τελικής απάντησης
         results = []
         for repo_name, cluster_label, coords in zip(repo_names, cluster_labels, coordinates_2d):
             results.append({
                 "repo_name": repo_name,
                 "cluster": int(cluster_label),
                 "coordinates": {
-                    "x": float(coords[0]),  # Συντεταγμένη x
-                    "y": float(coords[1])   # Συντεταγμένη y
+                    "x": float(coords[0]),
+                    "y": float(coords[1])
                 }
             })
 
