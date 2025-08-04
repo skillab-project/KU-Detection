@@ -5,17 +5,20 @@ from datetime import datetime
 import psycopg2
 import time
 import logging
+import pandas as pd
+import numpy as np
+from collections import defaultdict
+
+# --- Βιβλιοθήκες για ML και Ανάλυση ---
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.feature_extraction.text import TfidfTransformer
+
+# --- Imports από το project ---
 from core.ml_operations.loader import load_codebert_model
 from core.analysis.codebert_sliding_window import codebert_sliding_window
 from config.settings import CLONED_REPO_BASE_PATH, CODEBERT_BASE_PATH
-import pandas as pd
-import numpy as np
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
-from collections import defaultdict
-from core.ml_operations.loader import load_codebert_model
-from sklearn.feature_extraction.text import TfidfTransformer
-from sklearn.decomposition import PCA
+
 # Database connection settings
 load_dotenv()
 DB_HOST = os.getenv("DB_HOST")
@@ -848,3 +851,54 @@ def cluster_repositories_by_kus(num_clusters: int):
     except Exception as e:
         logging.exception(f"An unexpected error occurred during K-Means clustering: {e}")
         return None
+
+def get_entire_analysis_table():
+    """
+    Ανακτά ΟΛΕΣ τις εγγραφές και τις στήλες από τον πίνακα analysis_results.
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Απλό query για να πάρουμε όλα τα δεδομένα από τον πίνακα
+        cur.execute('''
+            SELECT id, repo_name, filename, author, timestamp, sha, detected_kus, elapsed_time
+            FROM analysis_results
+            ORDER BY repo_name, timestamp;
+        ''')
+        rows = cur.fetchall()
+        cur.close()
+
+        # Λίστα για την αποθήκευση των αποτελεσμάτων
+        all_results = []
+
+        # Επεξεργασία κάθε γραμμής
+        for row in rows:
+            # Αποσυμπίεση των πεδίων από τη γραμμή
+            (id, repo_name, filename, author, timestamp, sha, detected_kus, elapsed_time) = row
+
+            # Το detected_kus είναι τύπου JSONB, οπότε η psycopg2 το μετατρέπει ήδη σε dict.
+            # Το timestamp είναι datetime object, το μετατρέπουμε σε string.
+            timestamp_str = timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
+
+            # Προσθήκη του λεξικού στη λίστα
+            all_results.append({
+                "id": id,
+                "repo_name": repo_name,
+                "filename": filename,
+                "author": author,
+                "timestamp": timestamp_str,
+                "sha": sha,
+                "detected_kus": detected_kus, # Είναι ήδη dict
+                "elapsed_time": elapsed_time
+            })
+
+        return all_results
+
+    except Exception as e:
+        print(f"An error occurred while fetching the entire analysis_results table: {e}")
+        return None  # Επιστρέφουμε None σε περίπτωση σφάλματος
+
+    finally:
+        if 'conn' in locals() and conn is not None:
+            conn.close()
