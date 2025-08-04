@@ -869,6 +869,90 @@
         }
       }
     },
+    "/analysis_results/all": {
+      "get": {
+        "tags": [
+          "Analysis"
+        ],
+        "summary": "Get All Analysis Results Table",
+        "description": "Retrieves the entire content of the 'analysis_results' table from the database. This provides a raw dump of all individual analysis records across all repositories.",
+        "responses": {
+          "200": {
+            "description": "Successful retrieval of all analysis results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "integer",
+                        "description": "The unique identifier for the analysis record.",
+                        "example": 101
+                      },
+                      "repo_name": {
+                        "type": "string",
+                        "description": "The name of the repository this analysis belongs to.",
+                        "example": "my-cool-project"
+                      },
+                      "filename": {
+                        "type": "string",
+                        "description": "The name of the analyzed file.",
+                        "example": "src/main.py"
+                      },
+                      "author": {
+                        "type": "string",
+                        "description": "The author of the commit associated with the file.",
+                        "example": "john.doe@example.com"
+                      },
+                      "timestamp": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "The timestamp of the commit in ISO 8601 format.",
+                        "example": "2023-10-27T10:30:00"
+                      },
+                      "sha": {
+                        "type": "string",
+                        "description": "The SHA hash of the commit.",
+                        "example": "a1b2c3d4e5f6"
+                      },
+                      "detected_kus": {
+                        "type": "object",
+                        "description": "A JSON object where keys are KU identifiers and values indicate detection (e.g., '1' for detected).",
+                        "example": { "KU1": "1", "KU5": "1" }
+                      },
+                      "elapsed_time": {
+                        "type": "number",
+                        "format": "float",
+                        "description": "The time taken to analyze this specific file, in seconds.",
+                        "example": 15.78
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. Could not retrieve data from the database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Failed to retrieve the analysis results table"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ku_statistics": {
       "get": {
         "tags": [
