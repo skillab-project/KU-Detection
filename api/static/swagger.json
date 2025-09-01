@@ -920,7 +920,10 @@
                       "detected_kus": {
                         "type": "object",
                         "description": "A JSON object where keys are KU identifiers and values indicate detection (e.g., '1' for detected).",
-                        "example": { "KU1": "1", "KU5": "1" }
+                        "example": {
+                          "KU1": "1",
+                          "KU5": "1"
+                        }
                       },
                       "elapsed_time": {
                         "type": "number",
@@ -944,6 +947,84 @@
                     "error": {
                       "type": "string",
                       "example": "Failed to retrieve the analysis results table"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analysis_results/by_date_range": {
+      "get": {
+        "tags": [
+          "Analysis"
+        ],
+        "summary": "Get Analysis Results by Date Range",
+        "description": "Retrieves analysis results from the 'analysis_results' table that fall within a specified date range. The start and end months are inclusive. Dates should be provided in 'YYYY-MM' format.",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": true,
+            "description": "The starting month of the date range (inclusive). Format: YYYY-MM.",
+            "schema": {
+              "type": "string",
+              "example": "2025-06"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": true,
+            "description": "The ending month of the date range (inclusive). Format: YYYY-MM.",
+            "schema": {
+              "type": "string",
+              "example": "2025-12"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful retrieval of filtered analysis results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/paths/~1analysis_results~1all/get/responses/200/content/application~1json/schema/items"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request. Parameters are missing or have an incorrect format.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Please provide both 'start_date' and 'end_date' parameters in YYYY-MM format."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. Could not retrieve data from the database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Failed to retrieve filtered analysis results"
                     }
                   }
                 }
