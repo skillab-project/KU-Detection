@@ -29,8 +29,7 @@ from api.data_db import (
     get_ku_counts_by_organization,
     get_monthly_analysis_counts_by_org,
     cluster_repositories_by_kus,
-    get_entire_analysis_table,
-    get_analysis_results_by_date_range,
+    get_analysis_results,
 )
 from core.git_operations import clone_repo, repo_exists, extract_contributions
 from core.git_operations.repo import pull_repo, get_history_repo
@@ -439,60 +438,38 @@ def init_routes(app):
             logging.exception("Error in /cluster_repos endpoint")
             return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
-    @app.route("/analysis_results/all", methods=["GET"])
-    def get_all_analysis_table_data():
+    @app.route("/analysis_results", methods=["GET"])
+    def get_analysis_results_endpoint():
         """
-        Επιστρέφει ολόκληρο τον πίνακα analysis_results σε μορφή JSON.
-        """
-        try:
-            # Καλούμε τη νέα συνάρτηση που φτιάξαμε στο data_db.py
-            all_data = get_entire_analysis_table()
-
-            if all_data is not None:
-                # Αν η ανάκτηση ήταν επιτυχής, επιστρέφουμε τα δεδομένα
-                return jsonify(all_data), 200
-            else:
-                # Αν η συνάρτηση επέστρεψε None (λόγω σφάλματος)
-                return jsonify({"error": "Failed to retrieve the analysis results table"}), 500
-
-        except Exception as e:
-            # Γενικό σφάλμα σε περίπτωση απρόβλεπτου προβλήματος
-            logging.exception("Error in /analysis_results/all endpoint")
-            return jsonify({"error": str(e)}), 500
-
-    @app.route("/analysis_results/by_date_range", methods=["GET"])
-    def get_analysis_by_date_range():
-        """
-        Επιστρέφει τα δεδομένα του πίνακα analysis_results φιλτραρισμένα
-        μεταξύ δύο ημερομηνιών.
-        Query Params: start_date (YYYY-MM), end_date (YYYY-MM)
+        Επιστρέφει τα δεδομένα του πίνακα analysis_results.
+        Μπορεί να φιλτραριστεί με προαιρετικές παραμέτρους query:
+        - start_date (YYYY-MM)
+        - end_date (YYYY-MM)
+        Αν δεν δοθούν παράμετροι, επιστρέφει όλα τα δεδομένα.
         """
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
 
-        # Έλεγχος αν δόθηκαν οι παράμετροι
-        if not start_date or not end_date:
-            return jsonify(
-                {"error": "Please provide both 'start_date' and 'end_date' parameters in YYYY-MM format."}), 400
-
-        # Έλεγχος της μορφής των παραμέτρων
+        # Έλεγχος της μορφής των παραμέτρων, μόνο αν έχουν δοθεί
         try:
-            datetime.datetime.strptime(start_date, '%Y-%m')
-            datetime.datetime.strptime(end_date, '%Y-%m')
+            if start_date:
+                datetime.datetime.strptime(start_date, '%Y-%m')
+            if end_date:
+                datetime.datetime.strptime(end_date, '%Y-%m')
         except ValueError:
             return jsonify({"error": "Invalid date format. Please use YYYY-MM."}), 400
 
         try:
-            # Κλήση της νέας συνάρτησης από το data_db.py
-            filtered_data = get_analysis_results_by_date_range(start_date, end_date)
+            # Κλήση της νέας, ευέλικτης συνάρτησης
+            data = get_analysis_results(start_date, end_date)
 
-            if filtered_data is not None:
-                return jsonify(filtered_data), 200
+            if data is not None:
+                return jsonify(data), 200
             else:
-                return jsonify({"error": "Failed to retrieve filtered analysis results"}), 500
+                return jsonify({"error": "Failed to retrieve analysis results"}), 500
 
         except Exception as e:
-            logging.exception("Error in /analysis_results/by_date_range endpoint")
+            logging.exception("Error in /analysis_results endpoint")
             return jsonify({"error": str(e)}), 500
 
 
