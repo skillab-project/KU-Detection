@@ -869,16 +869,38 @@
         }
       }
     },
-    "/analysis_results/all": {
+    "/analysis_results": {
       "get": {
         "tags": [
           "Analysis"
         ],
-        "summary": "Get All Analysis Results Table",
-        "description": "Retrieves the entire content of the 'analysis_results' table from the database. This provides a raw dump of all individual analysis records across all repositories.",
+        "summary": "Get Analysis Results with Optional Filtering",
+        "description": "Retrieves records from the 'analysis_results' table. This single endpoint can return all results or a filtered subset based on an optional date range. If no parameters are provided, the entire table is returned. The start and end months are inclusive.",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "description": "The starting month to filter results from (inclusive). If omitted, results from the beginning of time are included. Format: YYYY-MM.",
+            "schema": {
+              "type": "string",
+              "example": "2025-06"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "The ending month to filter results up to (inclusive). If omitted, results up to the present are included. Format: YYYY-MM.",
+            "schema": {
+              "type": "string",
+              "example": "2025-12"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Successful retrieval of all analysis results.",
+            "description": "Successful retrieval of analysis results (either all or filtered).",
             "content": {
               "application/json": {
                 "schema": {
@@ -937,70 +959,8 @@
               }
             }
           },
-          "500": {
-            "description": "Internal server error. Could not retrieve data from the database.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string",
-                      "example": "Failed to retrieve the analysis results table"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/analysis_results/by_date_range": {
-      "get": {
-        "tags": [
-          "Analysis"
-        ],
-        "summary": "Get Analysis Results by Date Range",
-        "description": "Retrieves analysis results from the 'analysis_results' table that fall within a specified date range. The start and end months are inclusive. Dates should be provided in 'YYYY-MM' format.",
-        "parameters": [
-          {
-            "name": "start_date",
-            "in": "query",
-            "required": true,
-            "description": "The starting month of the date range (inclusive). Format: YYYY-MM.",
-            "schema": {
-              "type": "string",
-              "example": "2025-06"
-            }
-          },
-          {
-            "name": "end_date",
-            "in": "query",
-            "required": true,
-            "description": "The ending month of the date range (inclusive). Format: YYYY-MM.",
-            "schema": {
-              "type": "string",
-              "example": "2025-12"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful retrieval of filtered analysis results.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/paths/~1analysis_results~1all/get/responses/200/content/application~1json/schema/items"
-                  }
-                }
-              }
-            }
-          },
           "400": {
-            "description": "Invalid request. Parameters are missing or have an incorrect format.",
+            "description": "Invalid request. A provided date parameter has an incorrect format.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1008,7 +968,7 @@
                   "properties": {
                     "error": {
                       "type": "string",
-                      "example": "Please provide both 'start_date' and 'end_date' parameters in YYYY-MM format."
+                      "example": "Invalid date format. Please use YYYY-MM."
                     }
                   }
                 }
@@ -1024,7 +984,7 @@
                   "properties": {
                     "error": {
                       "type": "string",
-                      "example": "Failed to retrieve filtered analysis results"
+                      "example": "Failed to retrieve analysis results"
                     }
                   }
                 }
