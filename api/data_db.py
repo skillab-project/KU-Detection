@@ -8,6 +8,7 @@ import logging
 import pandas as pd
 import numpy as np
 from collections import defaultdict
+from dateutil.relativedelta import relativedelta
 
 # --- Βιβλιοθήκες για ML και Ανάλυση ---
 from sklearn.cluster import KMeans
@@ -898,6 +899,61 @@ def get_entire_analysis_table():
     except Exception as e:
         print(f"An error occurred while fetching the entire analysis_results table: {e}")
         return None  # Επιστρέφουμε None σε περίπτωση σφάλματος
+
+    finally:
+        if 'conn' in locals() and conn is not None:
+            conn.close()
+
+
+def get_analysis_results_by_date_range(start_date_str: str, end_date_str: str):
+    """
+    Ανακτά τις εγγραφές από τον πίνακα analysis_results που βρίσκονται
+    μέσα σε ένα συγκεκριμένο χρονικό εύρος.
+    Οι ημερομηνίες δίνονται ως strings της μορφής 'YYYY-MM'.
+    """
+    try:
+        # Μετατροπή του 'YYYY-MM' στην πρώτη μέρα του μήνα
+        start_date = datetime.strptime(start_date_str, '%Y-%m')
+
+        # Μετατροπή του 'YYYY-MM' στην πρώτη μέρα του επόμενου μήνα
+        # για να συμπεριλάβουμε ολόκληρο τον τελικό μήνα.
+        # Π.χ. για '2025-12', το end_date θα γίνει '2026-01-01'.
+        end_date_exclusive = datetime.strptime(end_date_str, '%Y-%m') + relativedelta(months=1)
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Query που φιλτράρει με βάση το timestamp
+        cur.execute('''
+            SELECT id, repo_name, filename, author, timestamp, sha, detected_kus, elapsed_time
+            FROM analysis_results
+            WHERE timestamp >= %s AND timestamp < %s
+            ORDER BY repo_name, timestamp;
+        ''', (start_date, end_date_exclusive))
+
+        rows = cur.fetchall()
+        cur.close()
+
+        all_results = []
+        for row in rows:
+            (id, repo_name, filename, author, timestamp, sha, detected_kus, elapsed_time) = row
+            timestamp_str = timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
+            all_results.append({
+                "id": id,
+                "repo_name": repo_name,
+                "filename": filename,
+                "author": author,
+                "timestamp": timestamp_str,
+                "sha": sha,
+                "detected_kus": detected_kus,
+                "elapsed_time": elapsed_time
+            })
+
+        return all_results
+
+    except Exception as e:
+        print(f"An error occurred while fetching analysis_results by date range: {e}")
+        return None
 
     finally:
         if 'conn' in locals() and conn is not None:
