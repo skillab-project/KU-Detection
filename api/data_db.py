@@ -904,32 +904,45 @@ def get_entire_analysis_table():
         if 'conn' in locals() and conn is not None:
             conn.close()
 
-
-def get_analysis_results_by_date_range(start_date_str: str, end_date_str: str):
+def get_analysis_results(start_date_str=None, end_date_str=None):
     """
-    Ανακτά τις εγγραφές από τον πίνακα analysis_results που βρίσκονται
-    μέσα σε ένα συγκεκριμένο χρονικό εύρος.
-    Οι ημερομηνίες δίνονται ως strings της μορφής 'YYYY-MM'.
+    Ανακτά εγγραφές από τον πίνακα analysis_results με προαιρετικό φιλτράρισμα ημερομηνίας.
+    - Αν δεν δοθεί καμία ημερομηνία, επιστρέφει όλες τις εγγραφές.
+    - Αν δοθεί μόνο start_date, επιστρέφει εγγραφές από εκείνη την ημερομηνία και μετά.
+    - Αν δοθεί μόνο end_date, επιστρέφει εγγραφές μέχρι εκείνη την ημερομηνία.
+    - Αν δοθούν και οι δύο, επιστρέφει εγγραφές εντός του εύρους.
     """
     try:
-        # Μετατροπή του 'YYYY-MM' στην πρώτη μέρα του μήνα
-        start_date = datetime.strptime(start_date_str, '%Y-%m')
+        base_query = '''
+            SELECT id, repo_name, filename, author, timestamp, sha, detected_kus, elapsed_time
+            FROM analysis_results
+        '''
 
-        # Μετατροπή του 'YYYY-MM' στην πρώτη μέρα του επόμενου μήνα
-        # για να συμπεριλάβουμε ολόκληρο τον τελικό μήνα.
-        # Π.χ. για '2025-12', το end_date θα γίνει '2026-01-01'.
-        end_date_exclusive = datetime.strptime(end_date_str, '%Y-%m') + relativedelta(months=1)
+        conditions = []
+        params = []
+
+        if start_date_str:
+            start_date = datetime.strptime(start_date_str, '%Y-%m')
+            conditions.append("timestamp >= %s")
+            params.append(start_date)
+
+        if end_date_str:
+            # Προσθέτουμε έναν μήνα για να συμπεριλάβουμε ολόκληρο τον τελικό μήνα
+            end_date_exclusive = datetime.strptime(end_date_str, '%Y-%m') + relativedelta(months=1)
+            conditions.append("timestamp < %s")
+            params.append(end_date_exclusive)
+
+        # Προσθήκη των συνθηκών WHERE στο query αν υπάρχουν
+        if conditions:
+            base_query += " WHERE " + " AND ".join(conditions)
+
+        # Πάντα ταξινομούμε τα αποτελέσματα για συνέπεια
+        base_query += " ORDER BY repo_name, timestamp;"
 
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Query που φιλτράρει με βάση το timestamp
-        cur.execute('''
-            SELECT id, repo_name, filename, author, timestamp, sha, detected_kus, elapsed_time
-            FROM analysis_results
-            WHERE timestamp >= %s AND timestamp < %s
-            ORDER BY repo_name, timestamp;
-        ''', (start_date, end_date_exclusive))
+        cur.execute(base_query, tuple(params))
 
         rows = cur.fetchall()
         cur.close()
@@ -952,7 +965,7 @@ def get_analysis_results_by_date_range(start_date_str: str, end_date_str: str):
         return all_results
 
     except Exception as e:
-        print(f"An error occurred while fetching analysis_results by date range: {e}")
+        print(f"An error occurred while fetching analysis_results: {e}")
         return None
 
     finally:
