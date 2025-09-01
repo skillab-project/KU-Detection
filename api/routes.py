@@ -30,6 +30,7 @@ from api.data_db import (
     get_monthly_analysis_counts_by_org,
     cluster_repositories_by_kus,
     get_entire_analysis_table,
+    get_analysis_results_by_date_range,
 )
 from core.git_operations import clone_repo, repo_exists, extract_contributions
 from core.git_operations.repo import pull_repo, get_history_repo
@@ -457,6 +458,41 @@ def init_routes(app):
         except Exception as e:
             # Γενικό σφάλμα σε περίπτωση απρόβλεπτου προβλήματος
             logging.exception("Error in /analysis_results/all endpoint")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/analysis_results/by_date_range", methods=["GET"])
+    def get_analysis_by_date_range():
+        """
+        Επιστρέφει τα δεδομένα του πίνακα analysis_results φιλτραρισμένα
+        μεταξύ δύο ημερομηνιών.
+        Query Params: start_date (YYYY-MM), end_date (YYYY-MM)
+        """
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+
+        # Έλεγχος αν δόθηκαν οι παράμετροι
+        if not start_date or not end_date:
+            return jsonify(
+                {"error": "Please provide both 'start_date' and 'end_date' parameters in YYYY-MM format."}), 400
+
+        # Έλεγχος της μορφής των παραμέτρων
+        try:
+            datetime.datetime.strptime(start_date, '%Y-%m')
+            datetime.datetime.strptime(end_date, '%Y-%m')
+        except ValueError:
+            return jsonify({"error": "Invalid date format. Please use YYYY-MM."}), 400
+
+        try:
+            # Κλήση της νέας συνάρτησης από το data_db.py
+            filtered_data = get_analysis_results_by_date_range(start_date, end_date)
+
+            if filtered_data is not None:
+                return jsonify(filtered_data), 200
+            else:
+                return jsonify({"error": "Failed to retrieve filtered analysis results"}), 500
+
+        except Exception as e:
+            logging.exception("Error in /analysis_results/by_date_range endpoint")
             return jsonify({"error": str(e)}), 500
 
 
