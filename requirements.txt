@@ -11,3 +11,4 @@ flask-swagger-ui==4.11.1
 numpy
 pandas
 scikit-learn
+python-dateutil==2.9.0.post0
