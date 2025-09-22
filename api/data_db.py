@@ -971,3 +971,125 @@ def get_analysis_results(start_date_str=None, end_date_str=None):
     finally:
         if 'conn' in locals() and conn is not None:
             conn.close()
+def calculate_risks():
+    """
+    Calculates KU Risk and Employee Risk based on the entire analysis dataset.
+    This function implements the logic described in the provided documentation.
+    """
+    try:
+        # --- Βήμα 1: Συλλογή και προετοιμασία δεδομένων ---
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Ανάκτηση όλων των σχετικών δεδομένων: filename, author, detected_kus
+        cur.execute('''
+            SELECT filename, author, detected_kus
+            FROM analysis_results
+        ''')
+        analysis_data = cur.fetchall()
+
+        # Ανάκτηση του συνολικού αριθμού μοναδικών αρχείων στο έργο
+        cur.execute('SELECT COUNT(DISTINCT filename) FROM analysis_results')
+        total_files = cur.fetchone()[0]
+
+        cur.close()
+        conn.close()
+
+        if not analysis_data or total_files == 0:
+            return {"error": "No analysis data found to calculate risks."}
+
+        # --- Βήμα 2: Δόμηση πληροφορίας (Aggregation) ---
+        # knowledge_units: {'KU_name': {'freq': count, 'authors': {set of authors}}}
+        # author_ku_map: {'author_name': {set of KUs}}
+        knowledge_units = defaultdict(lambda: {'freq': 0, 'authors': set()})
+        author_ku_map = defaultdict(set)
+
+        for filename, author, detected_kus in analysis_data:
+            for ku, is_present in detected_kus.items():
+                if int(is_present) == 1:
+                    knowledge_units[ku]['freq'] += 1
+                    knowledge_units[ku]['authors'].add(author)
+                    author_ku_map[author].add(ku)
+
+        # --- Βήμα 3: Υπολογισμός KU Risk ---
+        # Σταθερή πιθανότητα αποχώρησης ενός προγραμματιστή
+        P_A = 0.1
+        ku_risk_results = {}
+
+        for ku, data in knowledge_units.items():
+            emps = len(data['authors'])
+            freq = data['freq']
+
+            # P(L) = P_A ^ emps (Πιθανότητα απώλειας)
+            p_L = P_A ** emps
+
+            # Impact = freq / totalFiles (Αντίκτυπος)
+            impact = freq / total_files
+
+            # KU Risk = P(L) * Impact
+            ku_risk = p_L * impact
+
+            ku_risk_results[ku] = {
+                "ku_risk": ku_risk,
+                "probability_of_loss": p_L,
+                "impact": impact,
+                "employee_count": emps,
+                "file_frequency": freq
+            }
+
+        # --- Βήμα 4: Υπολογισμός Employee Risk ---
+        employee_risk_results = {}
+
+        for author, kus in author_ku_map.items():
+            total_delta_risk = 0.0  # (Σ ΔRisk_KUj) for Absolute Risk
+            total_before_risk = 0.0  # (Σ Risk_KUj_before) for Relative Risk
+
+            for ku in kus:
+                # Ανάκτηση δεδομένων για το KU
+                ku_data = knowledge_units[ku]
+                freq = ku_data['freq']
+                emps_before = len(ku_data['authors'])
+                impact = freq / total_files
+
+                # Υπολογισμός Risk_KUj_before
+                p_L_before = P_A ** emps_before
+                risk_before = p_L_before * impact
+
+                # Υπολογισμός Risk_KUj_after
+                emps_after = emps_before - 1
+                if emps_after == 0:
+                    # Ειδική περίπτωση: ο εργαζόμενος ήταν ο μοναδικός κάτοχος
+                    p_L_after = 1.0
+                else:
+                    p_L_after = P_A ** emps_after
+
+                risk_after = p_L_after * impact
+
+                # Υπολογισμός ΔRisk_KUj (Μεταβολή στον κίνδυνο)
+                delta_risk = risk_after - risk_before
+
+                total_delta_risk += delta_risk
+                total_before_risk += risk_before
+
+            # Υπολογισμός Absolute & Relative Risk για τον εργαζόμενο
+            absolute_risk = total_delta_risk
+
+            if total_before_risk > 0:
+                relative_risk = absolute_risk / total_before_risk
+            else:
+                relative_risk = 0.0  # Αν ο αρχικός κίνδυνος ήταν 0
+
+            employee_risk_results[author] = {
+                "absolute_employee_risk": absolute_risk,
+                "relative_employee_risk": relative_risk,
+                "ku_count": len(kus)
+            }
+
+        return {
+            "ku_risk": ku_risk_results,
+            "employee_risk": employee_risk_results
+        }
+
+    except Exception as e:
+        logging.exception("An error occurred during risk calculation")
+        return {"error": str(e)}

@@ -30,6 +30,7 @@ from api.data_db import (
     get_monthly_analysis_counts_by_org,
     cluster_repositories_by_kus,
     get_analysis_results,
+    calculate_risks,
 )
 from core.git_operations import clone_repo, repo_exists, extract_contributions
 from core.git_operations.repo import pull_repo, get_history_repo
@@ -256,6 +257,50 @@ def init_routes(app):
 
     # Configure logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    @app.route("/ku_risk", methods=["GET"])
+    def get_ku_risk_endpoint():
+        """
+        Calculates and returns the risk associated with each Knowledge Unit (KU).
+        The risk is a product of the probability of loss and the impact of that loss.
+        """
+        try:
+            risk_data = calculate_risks()
+            if "error" in risk_data:
+                return jsonify(risk_data), 500
+
+            # Μετατροπή σε λίστα για ευκολότερη διαχείριση στο frontend
+            ku_risk_list = [
+                {"ku_name": ku, **data} for ku, data in risk_data.get("ku_risk", {}).items()
+            ]
+
+            return jsonify(ku_risk_list), 200
+
+        except Exception as e:
+            logging.exception("Error in /ku_risk endpoint")
+            return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
+    @app.route("/employee_risk", methods=["GET"])
+    def get_employee_risk_endpoint():
+        """
+        Calculates and returns the risk associated with the hypothetical departure
+        of each employee, in both absolute and relative terms.
+        """
+        try:
+            risk_data = calculate_risks()
+            if "error" in risk_data:
+                return jsonify(risk_data), 500
+
+            # Μετατροπή σε λίστα για ευκολότερη διαχείριση στο frontend
+            employee_risk_list = [
+                {"employee_name": employee, **data} for employee, data in risk_data.get("employee_risk", {}).items()
+            ]
+
+            return jsonify(employee_risk_list), 200
+
+        except Exception as e:
+            logging.exception("Error in /employee_risk endpoint")
+            return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
     @app.route("/analyze", methods=["GET"])
     def analyze():

@@ -19,11 +19,154 @@
       "description": "Endpoints for running and retrieving analysis results."
     },
     {
+      "name": "Risk Analysis",
+      "description": "Endpoints for calculating knowledge and employee-related risks."
+    },
+    {
       "name": "Statistics",
       "description": "Endpoints for retrieving aggregated statistics."
     }
   ],
   "paths": {
+    "/ku_risk": {
+      "get": {
+        "tags": [
+          "Risk Analysis"
+        ],
+        "summary": "Calculate KU Risk",
+        "description": "Calculates and returns the risk associated with each individual Knowledge Unit (KU) based on all available analysis data. The risk for a KU is defined as the product of its probability of loss and its impact. A higher value indicates a more critical and vulnerable KU.",
+        "responses": {
+          "200": {
+            "description": "KU Risk calculation was successful.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "ku_name": {
+                        "type": "string",
+                        "description": "The name of the Knowledge Unit.",
+                        "example": "KU_15_ExceptionHandling"
+                      },
+                      "ku_risk": {
+                        "type": "number",
+                        "format": "float",
+                        "description": "The final calculated risk score for the KU (P(L) * Impact). Ranges from 0 to 1.",
+                        "example": 0.000125
+                      },
+                      "probability_of_loss": {
+                        "type": "number",
+                        "format": "float",
+                        "description": "The probability that the knowledge of this KU is completely lost from the organization, calculated as P_A ^ employee_count.",
+                        "example": 0.001
+                      },
+                      "impact": {
+                        "type": "number",
+                        "format": "float",
+                        "description": "The functional impact of losing this KU, calculated as the ratio of files containing the KU to the total number of files.",
+                        "example": 0.125
+                      },
+                      "employee_count": {
+                        "type": "integer",
+                        "description": "The number of unique employees who possess knowledge of this KU.",
+                        "example": 3
+                      },
+                      "file_frequency": {
+                        "type": "integer",
+                        "description": "The number of files in which this KU was detected.",
+                        "example": 50
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An internal server error occurred during risk calculation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "An unexpected error occurred: database connection failed"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/employee_risk": {
+      "get": {
+        "tags": [
+          "Risk Analysis"
+        ],
+        "summary": "Calculate Employee Risk",
+        "description": "Calculates the risk associated with the hypothetical departure of each employee. This is determined by the impact their departure would have on the overall risk of the Knowledge Units they possess.",
+        "responses": {
+          "200": {
+            "description": "Employee Risk calculation was successful.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "employee_name": {
+                        "type": "string",
+                        "description": "The name or identifier of the employee.",
+                        "example": "jane.doe@example.com"
+                      },
+                      "absolute_employee_risk": {
+                        "type": "number",
+                        "format": "float",
+                        "description": "The total absolute increase in risk across all of the employee's KUs if they were to leave. Represents the raw 'damage' of their departure.",
+                        "example": 0.0085
+                      },
+                      "relative_employee_risk": {
+                        "type": "number",
+                        "format": "float",
+                        "description": "The percentage increase in risk relative to the initial total risk of the employee's KUs. A value of 1.0 means the risk doubles.",
+                        "example": 9.0
+                      },
+                      "ku_count": {
+                        "type": "integer",
+                        "description": "The number of unique Knowledge Units this employee contributes to.",
+                        "example": 12
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An internal server error occurred during risk calculation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "An unexpected error occurred: database connection failed"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/cluster_repos": {
       "post": {
         "tags": [
