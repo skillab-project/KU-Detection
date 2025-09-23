@@ -30,7 +30,7 @@ from api.data_db import (
     get_monthly_analysis_counts_by_org,
     cluster_repositories_by_kus,
     get_analysis_results,
-    calculate_risks,
+    calculate_risks, get_ku_counts_by_developer,
 )
 from core.git_operations import clone_repo, repo_exists, extract_contributions
 from core.git_operations.repo import pull_repo, get_history_repo
@@ -516,6 +516,31 @@ def init_routes(app):
         except Exception as e:
             logging.exception("Error in /analysis_results endpoint")
             return jsonify({"error": str(e)}), 500
+
+    @app.route("/developer_stats/<string:developer_name>", methods=["GET"])
+    def get_developer_stats(developer_name):
+        """
+        Επιστρέφει στατιστικά για έναν συγκεκριμένο προγραμματιστή.
+        Η απάντηση είναι ένα JSON object με όλα τα KUs (K1-K27) και σε πόσα
+        μοναδικά αρχεία βρέθηκε το καθένα για τον συγκεκριμένο author.
+        """
+        if not developer_name:
+            return jsonify({"error": "Developer name cannot be empty"}), 400
+
+        try:
+            # Καλούμε τη συνάρτηση που φτιάξαμε στο data_db.py
+            developer_data = get_ku_counts_by_developer(developer_name)
+
+            if developer_data is not None:
+                # Αν η συνάρτηση εκτελεστεί επιτυχώς, επιστρέφει το λεξικό
+                return jsonify(developer_data), 200
+            else:
+                # Αν η συνάρτηση επέστρεψε None (π.χ. λόγω σφάλματος στη βάση)
+                return jsonify({"error": "Failed to retrieve statistics for the developer"}), 500
+
+        except Exception as e:
+            logging.exception(f"Error in /developer_stats/{developer_name} endpoint")
+            return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
 
 init_routes(app)

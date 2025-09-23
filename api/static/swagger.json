@@ -1256,6 +1256,88 @@
           }
         }
       }
+    },
+    "/developer_stats/{developer_name}": {
+      "get": {
+        "tags": [
+          "Statistics"
+        ],
+        "summary": "Get KU Statistics for a Specific Developer",
+        "description": "Retrieves the count of unique files where each Knowledge Unit (KU) was detected for a single, specified developer. The response is a single JSON object containing all KUs (K1 to K27), with the count as the value. KUs not found for the developer will have a value of 0.",
+        "parameters": [
+          {
+            "name": "developer_name",
+            "in": "path",
+            "required": true,
+            "description": "The name of the developer (author) to retrieve statistics for. This is case-sensitive and must match the name in the database.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "llk89"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved the KU statistics for the specified developer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "A dictionary where keys are the KU names (e.g., 'K1', 'K2') and values are the integer count of unique files.",
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "example": {
+                    "K1": 0,
+                    "K2": 5,
+                    "K3": 1,
+                    "K4": 1,
+                    "K5": 2,
+                    "K6": 0,
+                    "K7": 1,
+                    "K8": 1,
+                    "K9": 0,
+                    "K10": 0,
+                    "K11": 0,
+                    "K12": 0,
+                    "K13": 0,
+                    "K14": 0,
+                    "K15": 1,
+                    "K16": 0,
+                    "K17": 0,
+                    "K18": 0,
+                    "K19": 0,
+                    "K20": 0,
+                    "K21": 0,
+                    "K22": 0,
+                    "K23": 0,
+                    "K24": 0,
+                    "K25": 0,
+                    "K26": 0,
+                    "K27": 0
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An internal server error occurred, e.g., failed to connect to the database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Failed to retrieve statistics for the developer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

@@ -1093,3 +1093,51 @@ def calculate_risks():
     except Exception as e:
         logging.exception("An error occurred during risk calculation")
         return {"error": str(e)}
+def get_ku_counts_by_developer(developer_name):
+    """
+    Για έναν συγκεκριμένο προγραμματιστή, επιστρέφει ένα λεξικό με όλα τα KUs
+    (K1 έως K27) και την τιμή τους να είναι το πλήθος των *μοναδικών αρχείων*
+    στα οποία εντοπίστηκε το καθένα. Τα KUs που δεν βρέθηκαν έχουν τιμή 0.
+    """
+    # 1. Δημιουργούμε το τελικό λεξικό με όλα τα KUs αρχικοποιημένα στο 0.
+    # Αυτό εγγυάται ότι η απάντηση θα έχει πάντα την ίδια δομή.
+    all_kus = {f"K{i}": 0 for i in range(1, 28)}
+
+    # 2. Το SQL query που θα "ξεδιπλώσει" το JSON και θα μετρήσει
+    #    τα μοναδικά αρχεία για τα KUs που βρέθηκαν.
+    sql_query = """
+        SELECT
+            ku.key AS ku_name,
+            COUNT(DISTINCT ar.filename) AS file_count
+        FROM
+            analysis_results ar,
+            LATERAL jsonb_each_text(ar.detected_kus) AS ku
+        WHERE
+            ar.author = %s
+            AND ku.value = '1'
+        GROUP BY
+            ku_name;
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # Περνάμε το όνομα του developer ως παράμετρο για ασφάλεια (αποφυγή SQL Injection)
+        cur.execute(sql_query, (developer_name,))
+        rows = cur.fetchall()
+        cur.close()
+
+        # 3. Ενημερώνουμε το αρχικό λεξικό με τα αποτελέσματα από τη βάση.
+        #    Μόνο τα KUs που βρέθηκαν θα ενημερωθούν, τα υπόλοιπα θα παραμείνουν 0.
+        for ku_name, file_count in rows:
+            if ku_name in all_kus:
+                all_kus[ku_name] = int(file_count)
+
+        # 4. Επιστρέφουμε το πλήρες λεξικό.
+        return all_kus
+
+    except Exception as e:
+        logging.error(f"An error occurred while getting KU counts for developer {developer_name}: {e}")
+        return None  # Επιστρέφουμε None σε περίπτωση σφάλματος
+    finally:
+        if 'conn' in locals() and conn is not None:
+            conn.close()
