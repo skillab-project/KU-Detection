@@ -31,6 +31,7 @@ from api.data_db import (
     cluster_repositories_by_kus,
     get_analysis_results,
     calculate_risks, get_ku_counts_by_developer,
+    get_all_developer_ku_vectors,
 )
 from core.git_operations import clone_repo, repo_exists, extract_contributions
 from core.git_operations.repo import pull_repo, get_history_repo
@@ -541,6 +542,27 @@ def init_routes(app):
         except Exception as e:
             logging.exception(f"Error in /developer_stats/{developer_name} endpoint")
             return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
+    @app.route("/developer_ku_overview", methods=["GET"])
+    def get_all_developer_ku_overview():
+        """
+        Επιστρέφει μια συνολική λίστα για όλους τους developers. Κάθε στοιχείο
+        της λίστας αντιστοιχεί σε έναν developer μέσα σε ένα repository και
+        περιλαμβάνει το KU vector των συνεισφορών του.
+        """
+        try:
+            # Καλούμε τη νέα συνάρτηση που δεν παίρνει όρισμα
+            all_developer_data = get_all_developer_ku_vectors()
+
+            if all_developer_data is not None:
+                return jsonify(all_developer_data), 200
+            else:
+                return jsonify({"error": "Failed to retrieve KU overview for all developers"}), 500
+
+        except Exception as e:
+            logging.exception(f"Error in /developer_ku_overview endpoint")
+            return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
 
 
 init_routes(app)

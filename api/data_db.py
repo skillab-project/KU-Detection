@@ -1150,7 +1150,7 @@ def get_ku_counts_by_developer(developer_name):
         #    Μόνο τα KUs που βρέθηκαν θα ενημερωθούν, τα υπόλοιπα θα παραμείνουν 0.
         for ku_name, file_count in rows:
             if ku_name in all_kus:
-                all_kus[ku_name] = int(file_count)
+                all_kus[ku_name] = 1
 
         # 4. Επιστρέφουμε το πλήρες λεξικό.
         return all_kus
@@ -1158,6 +1158,66 @@ def get_ku_counts_by_developer(developer_name):
     except Exception as e:
         logging.error(f"An error occurred while getting KU counts for developer {developer_name}: {e}")
         return None  # Επιστρέφουμε None σε περίπτωση σφάλματος
+    finally:
+        if 'conn' in locals() and conn is not None:
+            conn.close()
+def get_all_developer_ku_vectors():
+    """
+    Για όλους τους developers, επιστρέφει μια λίστα με τα repositories
+    στα οποία έχουν συνεισφέρει. Για κάθε συνδυασμό developer-repository,
+    επιστρέφει το όνομα, τον οργανισμό, και μια λίστα με τα μοναδικά KUs.
+    """
+    sql_query = """
+        SELECT
+            ar.author,
+            r.name, -- ΔΙΟΡΘΩΣΗ: Η σωστή στήλη από τον πίνακα repositories είναι 'name'
+            r.organization,
+            ARRAY_AGG(DISTINCT ku.key ORDER BY ku.key) as present_kus
+        FROM
+            analysis_results ar
+        JOIN
+            repositories r ON ar.repo_name = r.name,
+            LATERAL jsonb_each_text(ar.detected_kus) AS ku
+        WHERE
+            ku.value = '1'
+        GROUP BY
+            ar.author, r.name, r.organization -- ΔΙΟΡΘΩΣΗ: Χρησιμοποιούμε τη σωστή στήλη 'name'
+        ORDER BY
+            ar.author, r.name; -- ΔΙΟΡΘΩΣΗ: Χρησιμοποιούμε τη σωστή στήλη 'name'
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # Δεν περνάμε πλέον παραμέτρους στο execute
+        cur.execute(sql_query)
+        rows = cur.fetchall()
+        cur.close()
+
+        results = []
+        # Δημιουργούμε το πρότυπο του binary vector με όλα τα KUs ως 0
+        all_kus_template = {f"K{i}": 0 for i in range(1, 28)}
+
+        # Η επεξεργασία είναι ίδια, απλά τώρα το 'author' έρχεται από τη βάση
+        for author, repo_name, organization, present_kus_list in rows:
+            ku_vector = all_kus_template.copy()
+
+            if present_kus_list:
+                for ku in present_kus_list:
+                    if ku in ku_vector:
+                        ku_vector[ku] = 1
+
+            results.append({
+                "developer_name": author,  # Το παίρνουμε από το αποτέλεσμα του query
+                "organization": organization,
+                "repo_name": repo_name,
+                "ku_vector": ku_vector
+            })
+
+        return results
+
+    except Exception as e:
+        logging.error(f"An error occurred while getting KU vectors for all developers: {e}")
+        return None
     finally:
         if 'conn' in locals() and conn is not None:
             conn.close()
