@@ -1061,6 +1061,11 @@
                         "description": "The name of the repository this analysis belongs to.",
                         "example": "my-cool-project"
                       },
+                      "organization": {
+                        "type": "string",
+                        "description": "The organization or owner the repository belongs to.",
+                        "example": "apache"
+                      },
                       "filename": {
                         "type": "string",
                         "description": "The name of the analyzed file.",
