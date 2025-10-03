@@ -34,7 +34,19 @@
           "Risk Analysis"
         ],
         "summary": "Calculate KU Risk",
-        "description": "Calculates and returns the risk associated with each individual Knowledge Unit (KU) based on all available analysis data. The risk for a KU is defined as the product of its probability of loss and its impact. A higher value indicates a more critical and vulnerable KU.",
+        "description": "Calculates and returns the risk associated with each individual Knowledge Unit (KU). The risk for a KU is defined as the product of its probability of loss and its impact. This can be filtered by a specific organization. If no organization is specified, the calculation is performed across all available data.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "query",
+            "required": false,
+            "description": "Optional. The name of the organization to filter the risk calculation by. If omitted, the calculation is performed across all organizations.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "apache"
+          }
+        ],
         "responses": {
           "200": {
             "description": "KU Risk calculation was successful.",
@@ -48,7 +60,7 @@
                       "ku_name": {
                         "type": "string",
                         "description": "The name of the Knowledge Unit.",
-                        "example": "KU_15_ExceptionHandling"
+                        "example": "K15"
                       },
                       "ku_risk": {
                         "type": "number",
@@ -109,7 +121,19 @@
           "Risk Analysis"
         ],
         "summary": "Calculate Employee Risk",
-        "description": "Calculates the risk associated with the hypothetical departure of each employee. This is determined by the impact their departure would have on the overall risk of the Knowledge Units they possess.",
+        "description": "Calculates the risk associated with the hypothetical departure of each employee, based on the KUs they possess. This can be filtered by a specific organization. If no organization is specified, the calculation is performed across all available data.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "query",
+            "required": false,
+            "description": "Optional. The name of the organization to filter the risk calculation by. If omitted, the calculation is performed across all organizations.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "apache"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Employee Risk calculation was successful.",
@@ -1349,8 +1373,30 @@
         "tags": [
           "Statistics"
         ],
-        "summary": "Get KU Contribution Vectors for All Developers",
-        "description": "Retrieves a comprehensive list of all developers and their Knowledge Unit (KU) contributions across different repositories. Each entry in the list represents a unique developer-repository pair, providing a binary vector that indicates which KUs the developer has contributed to within that specific repository. This is useful for understanding the knowledge distribution and expertise of developers across the entire project portfolio.",
+        "summary": "Get KU Contribution Vectors for All Developers (with optional date filtering)",
+        "description": "Retrieves a comprehensive list of all developers and their Knowledge Unit (KU) contributions across different repositories. Each entry in the list represents a unique developer-repository pair, providing a binary vector that indicates which KUs the developer has contributed to within that specific repository. This endpoint can be filtered by a date range using the `start_date` and `end_date` query parameters. If no parameters are provided, all results are returned.",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "description": "The starting month to filter results from (inclusive). Format: YYYY-MM.",
+            "schema": {
+              "type": "string",
+              "example": "2025-06"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "The ending month to filter results up to (inclusive). Format: YYYY-MM.",
+            "schema": {
+              "type": "string",
+              "example": "2025-12"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successfully retrieved the KU overview for all developers.",
@@ -1416,6 +1462,22 @@
                           "K27": 0
                         }
                       }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request. A provided date parameter has an incorrect format.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Invalid date format. Please use YYYY-MM."
                     }
                   }
                 }

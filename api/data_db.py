@@ -991,36 +991,64 @@ def get_analysis_results(start_date_str=None, end_date_str=None):
     finally:
         if 'conn' in locals() and conn is not None:
             conn.close()
-def calculate_risks():
+
+
+def calculate_risks(organization=None):
     """
-    Calculates KU Risk and Employee Risk based on the entire analysis dataset.
-    This function implements the logic described in the provided documentation.
+    Calculates KU Risk and Employee Risk.
+    Can be filtered by a specific organization.
+
+    Args:
+        organization (str, optional): The name of the organization to filter by.
+                                      If None, calculates for all organizations.
     """
     try:
         # --- Βήμα 1: Συλλογή και προετοιμασία δεδομένων ---
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Ανάκτηση όλων των σχετικών δεδομένων: filename, author, detected_kus
-        cur.execute('''
-            SELECT filename, author, detected_kus
-            FROM analysis_results
-        ''')
+        # --- ΑΛΛΑΓΗ 1: Δυναμική κατασκευή των SQL queries ---
+        # Βασικό query που ενώνει τους δύο πίνακες
+        base_query_select = '''
+            SELECT ar.filename, ar.author, ar.detected_kus
+            FROM analysis_results ar
+            JOIN repositories r ON ar.repo_name = r.name
+        '''
+        base_query_count = '''
+            SELECT COUNT(DISTINCT ar.filename)
+            FROM analysis_results ar
+            JOIN repositories r ON ar.repo_name = r.name
+        '''
+
+        params = []
+        where_clause = ""
+
+        # Αν έχει δοθεί οργανισμός, προσθέτουμε τη συνθήκη WHERE
+        if organization:
+            where_clause = " WHERE r.organization = %s"
+            params.append(organization)
+
+        # Εκτέλεση του query για τα δεδομένα της ανάλυσης
+        cur.execute(base_query_select + where_clause, tuple(params))
         analysis_data = cur.fetchall()
 
-        # Ανάκτηση του συνολικού αριθμού μοναδικών αρχείων στο έργο
-        cur.execute('SELECT COUNT(DISTINCT filename) FROM analysis_results')
-        total_files = cur.fetchone()[0]
+        # Εκτέλεση του query για τον συνολικό αριθμό αρχείων
+        cur.execute(base_query_count + where_clause, tuple(params))
+        total_files_result = cur.fetchone()
+        total_files = total_files_result[0] if total_files_result else 0
 
         cur.close()
         conn.close()
 
         if not analysis_data or total_files == 0:
-            return {"error": "No analysis data found to calculate risks."}
+            # Επιστρέφουμε κενά αποτελέσματα αντί για σφάλμα αν δεν βρεθούν δεδομένα
+            return {
+                "ku_risk": {},
+                "employee_risk": {}
+            }
 
         # --- Βήμα 2: Δόμηση πληροφορίας (Aggregation) ---
-        # knowledge_units: {'KU_name': {'freq': count, 'authors': {set of authors}}}
-        # author_ku_map: {'author_name': {set of KUs}}
+        # (Η υπόλοιπη λογική παραμένει ακριβώς η ίδια)
         knowledge_units = defaultdict(lambda: {'freq': 0, 'authors': set()})
         author_ku_map = defaultdict(set)
 
@@ -1032,23 +1060,15 @@ def calculate_risks():
                     author_ku_map[author].add(ku)
 
         # --- Βήμα 3: Υπολογισμός KU Risk ---
-        # Σταθερή πιθανότητα αποχώρησης ενός προγραμματιστή
         P_A = 0.1
         ku_risk_results = {}
 
         for ku, data in knowledge_units.items():
             emps = len(data['authors'])
             freq = data['freq']
-
-            # P(L) = P_A ^ emps (Πιθανότητα απώλειας)
             p_L = P_A ** emps
-
-            # Impact = freq / totalFiles (Αντίκτυπος)
             impact = freq / total_files
-
-            # KU Risk = P(L) * Impact
             ku_risk = p_L * impact
-
             ku_risk_results[ku] = {
                 "ku_risk": ku_risk,
                 "probability_of_loss": p_L,
@@ -1061,44 +1081,25 @@ def calculate_risks():
         employee_risk_results = {}
 
         for author, kus in author_ku_map.items():
-            total_delta_risk = 0.0  # (Σ ΔRisk_KUj) for Absolute Risk
-            total_before_risk = 0.0  # (Σ Risk_KUj_before) for Relative Risk
+            total_delta_risk = 0.0
+            total_before_risk = 0.0
 
             for ku in kus:
-                # Ανάκτηση δεδομένων για το KU
                 ku_data = knowledge_units[ku]
                 freq = ku_data['freq']
                 emps_before = len(ku_data['authors'])
                 impact = freq / total_files
-
-                # Υπολογισμός Risk_KUj_before
                 p_L_before = P_A ** emps_before
                 risk_before = p_L_before * impact
-
-                # Υπολογισμός Risk_KUj_after
                 emps_after = emps_before - 1
-                if emps_after == 0:
-                    # Ειδική περίπτωση: ο εργαζόμενος ήταν ο μοναδικός κάτοχος
-                    p_L_after = 1.0
-                else:
-                    p_L_after = P_A ** emps_after
-
+                p_L_after = 1.0 if emps_after == 0 else P_A ** emps_after
                 risk_after = p_L_after * impact
-
-                # Υπολογισμός ΔRisk_KUj (Μεταβολή στον κίνδυνο)
                 delta_risk = risk_after - risk_before
-
                 total_delta_risk += delta_risk
                 total_before_risk += risk_before
 
-            # Υπολογισμός Absolute & Relative Risk για τον εργαζόμενο
             absolute_risk = total_delta_risk
-
-            if total_before_risk > 0:
-                relative_risk = absolute_risk / total_before_risk
-            else:
-                relative_risk = 0.0  # Αν ο αρχικός κίνδυνος ήταν 0
-
+            relative_risk = absolute_risk / total_before_risk if total_before_risk > 0 else 0.0
             employee_risk_results[author] = {
                 "absolute_employee_risk": absolute_risk,
                 "relative_employee_risk": relative_risk,
@@ -1161,16 +1162,20 @@ def get_ku_counts_by_developer(developer_name):
     finally:
         if 'conn' in locals() and conn is not None:
             conn.close()
-def get_all_developer_ku_vectors():
+
+
+def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None):
     """
     Για όλους τους developers, επιστρέφει μια λίστα με τα repositories
-    στα οποία έχουν συνεισφέρει. Για κάθε συνδυασμό developer-repository,
-    επιστρέφει το όνομα, τον οργανισμό, και μια λίστα με τα μοναδικά KUs.
+    στα οποία έχουν συνεισφέρει, φιλτραρισμένη προαιρετικά από ένα χρονικό εύρος.
+    Για κάθε συνδυασμό developer-repository, επιστρέφει το όνομα, τον οργανισμό,
+    και μια λίστα με τα μοναδικά KUs που βρέθηκαν εντός του χρονικού εύρους.
     """
-    sql_query = """
+    # --- ΑΛΛΑΓΗ 1: Δυναμική κατασκευή του SQL Query ---
+    base_query = """
         SELECT
             ar.author,
-            r.name, -- ΔΙΟΡΘΩΣΗ: Η σωστή στήλη από τον πίνακα repositories είναι 'name'
+            r.name,
             r.organization,
             ARRAY_AGG(DISTINCT ku.key ORDER BY ku.key) as present_kus
         FROM
@@ -1178,26 +1183,56 @@ def get_all_developer_ku_vectors():
         JOIN
             repositories r ON ar.repo_name = r.name,
             LATERAL jsonb_each_text(ar.detected_kus) AS ku
-        WHERE
-            ku.value = '1'
-        GROUP BY
-            ar.author, r.name, r.organization -- ΔΙΟΡΘΩΣΗ: Χρησιμοποιούμε τη σωστή στήλη 'name'
-        ORDER BY
-            ar.author, r.name; -- ΔΙΟΡΘΩΣΗ: Χρησιμοποιούμε τη σωστή στήλη 'name'
     """
+
+    conditions = ["ku.value = '1'"]
+    params = []
+
+    # Προσθήκη συνθήκης για την αρχική ημερομηνία
+    if start_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m')
+            conditions.append("ar.timestamp >= %s")
+            params.append(start_date)
+        except ValueError:
+            # Αν η μορφή είναι λάθος, αγνόησέ την ή χειρίσου το σφάλμα
+            logging.warning(f"Invalid start_date format provided: {start_date_str}")
+            pass
+
+    # Προσθήκη συνθήκης για την τελική ημερομηνία
+    if end_date_str:
+        try:
+            # Για να συμπεριλάβουμε ολόκληρο τον μήνα, θέτουμε το όριο στην αρχή του επόμενου μήνα
+            end_date_exclusive = datetime.strptime(end_date_str, '%Y-%m') + relativedelta(months=1)
+            conditions.append("ar.timestamp < %s")
+            params.append(end_date_exclusive)
+        except ValueError:
+            logging.warning(f"Invalid end_date format provided: {end_date_str}")
+            pass
+
+    # Σύνθεση του τελικού query
+    if conditions:
+        base_query += " WHERE " + " AND ".join(conditions)
+
+    base_query += """
+        GROUP BY
+            ar.author, r.name, r.organization
+        ORDER BY
+            ar.author, r.name;
+    """
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        # Δεν περνάμε πλέον παραμέτρους στο execute
-        cur.execute(sql_query)
+
+        # --- ΑΛΛΑΓΗ 2: Εκτέλεση του query με τις παραμέτρους ---
+        cur.execute(base_query, tuple(params))
         rows = cur.fetchall()
         cur.close()
 
         results = []
-        # Δημιουργούμε το πρότυπο του binary vector με όλα τα KUs ως 0
         all_kus_template = {f"K{i}": 0 for i in range(1, 28)}
 
-        # Η επεξεργασία είναι ίδια, απλά τώρα το 'author' έρχεται από τη βάση
         for author, repo_name, organization, present_kus_list in rows:
             ku_vector = all_kus_template.copy()
 
@@ -1207,7 +1242,7 @@ def get_all_developer_ku_vectors():
                         ku_vector[ku] = 1
 
             results.append({
-                "developer_name": author,  # Το παίρνουμε από το αποτέλεσμα του query
+                "developer_name": author,
                 "organization": organization,
                 "repo_name": repo_name,
                 "ku_vector": ku_vector
