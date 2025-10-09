@@ -278,34 +278,57 @@ class FlaskAPITests(unittest.TestCase):
     def test_list_repos(self, mock_get_all_repos):
         """
         Title: Testing repository listing functionality
-        Description: This test verifies that the /repos GET endpoint correctly retrieves all
-        repositories from the database. It tests successful retrieval scenario and proper error
-        handling when database exceptions occur during the retrieval process.
+        Description: This test verifies that the /repos GET endpoint correctly retrieves
+        repositories from the database. It tests retrieving all repositories, retrieving a
+        filtered list by organization, and proper error handling.
         Related methods: app.get_all_repos_from_db
         """
-        mock_repos = [
-            {"name": "Test Repo 1", "url": "testurl1", "organization": None, "description": "", "comments": "",
+        # --- Δημιουργία δοκιμαστικών δεδομένων με οργανισμούς ---
+        mock_repos_all = [
+            {"name": "Apache Repo", "url": "testurl1", "organization": "apache", "description": "", "comments": "",
              "created_at": None, "updated_at": None, "analysis_status": None, "analysis_start_time": None,
              "analysis_end_time": None, "analysis_progress": None, "analysis_error_message": None},
-            {"name": "Test Repo 2", "url": "testurl2", "organization": None, "description": "", "comments": "",
+            {"name": "Google Repo", "url": "testurl2", "organization": "google", "description": "", "comments": "",
              "created_at": None, "updated_at": None, "analysis_status": None, "analysis_start_time": None,
              "analysis_end_time": None, "analysis_progress": None, "analysis_error_message": None}
         ]
-        mock_get_all_repos.return_value = mock_repos
+        mock_repos_apache = [mock_repos_all[0]]  # Μόνο το repo της apache
+
+        # --- Σενάrio 1: Κλήση ΧΩΡΙΣ φίλτρο (επιστρέφει τα πάντα) ---
+        mock_get_all_repos.return_value = mock_repos_all
+
         response = self.client.get('/repos')
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.data)
         self.assertEqual(len(data), 2)
-        self.assertEqual(data[0]['name'], "Test Repo 1")
-        self.assertEqual(data[1]['url'], "testurl2")
+        self.assertEqual(data[0]['name'], "Apache Repo")
 
-        # Test for DB error
+        # Έλεγχος ότι η συνάρτηση της βάσης κλήθηκε σωστά (χωρίς όρισμα)
+        mock_get_all_repos.assert_called_once_with(organization=None)
+
+        # --- Σενάριο 2: Κλήση ΜΕ φίλτρο organization ---
+        mock_get_all_repos.reset_mock()  # Καθαρίζουμε το mock για τη νέα κλήση
+        mock_get_all_repos.return_value = mock_repos_apache
+
+        response = self.client.get('/repos?organization=apache')
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['organization'], 'apache')
+
+        # Έλεγχος ότι η συνάρτηση της βάσης κλήθηκε σωστά (με το όρισμα)
+        mock_get_all_repos.assert_called_once_with(organization='apache')
+
+        # --- Σενάριο 3: Σφάλμα στη βάση δεδομένων ---
+        mock_get_all_repos.reset_mock()
         mock_get_all_repos.side_effect = Exception("Database error")
+
         response = self.client.get('/repos')
         data = json.loads(response.data)
         self.assertEqual(response.status_code, 500)
         self.assertEqual(data['error'], 'Database error')
-        mock_get_all_repos.side_effect = None
+
+        mock_get_all_repos.side_effect = None  # Καθαρισμός του side effect
 
     @patch('api.routes.background_task_executor.submit')
     @patch('api.routes.read_files_from_dict_list')

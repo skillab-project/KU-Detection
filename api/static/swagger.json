@@ -443,10 +443,22 @@
           "Repository Management"
         ],
         "summary": "List Repositories",
-        "description": "Lists all repository entries",
+        "description": "Retrieves a list of all registered repositories. The list can be optionally filtered to show only repositories belonging to a specific organization.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "query",
+            "required": false,
+            "description": "Optional. The name of the organization to filter the repository list by. If omitted, all repositories are returned.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "apache"
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Successsful Operation",
+            "description": "Successful retrieval of repositories.",
             "content": {
               "application/json": {
                 "schema": {
@@ -454,13 +466,70 @@
                   "items": {
                     "type": "object",
                     "properties": {
-                      "repo_name": {
+                      "name": {
                         "type": "string",
-                        "description": "Name of repository"
+                        "description": "The unique name of the repository.",
+                        "example": "kafka"
                       },
                       "url": {
                         "type": "string",
-                        "description": "Repository URL"
+                        "description": "The Git URL of the repository.",
+                        "example": "https://github.com/apache/kafka.git"
+                      },
+                      "organization": {
+                        "type": "string",
+                        "nullable": true,
+                        "description": "The organization the repository belongs to.",
+                        "example": "apache"
+                      },
+                      "description": {
+                        "type": "string",
+                        "nullable": true,
+                        "description": "A brief description of the repository."
+                      },
+                      "comments": {
+                        "type": "string",
+                        "nullable": true,
+                        "description": "User-added comments about the repository."
+                      },
+                      "created_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "The timestamp when the repository was first added."
+                      },
+                      "updated_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "The timestamp when the repository was last updated."
+                      },
+                      "analysis_status": {
+                        "type": "string",
+                        "nullable": true,
+                        "description": "The current status of the code analysis (e.g., 'completed', 'in-progress', 'error').",
+                        "example": "completed"
+                      },
+                      "analysis_start_time": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true,
+                        "description": "The timestamp when the last analysis started."
+                      },
+                      "analysis_end_time": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true,
+                        "description": "The timestamp when the last analysis finished."
+                      },
+                      "analysis_progress": {
+                        "type": "integer",
+                        "nullable": true,
+                        "description": "The progress of the current analysis, as a percentage (0-100).",
+                        "example": 100
+                      },
+                      "analysis_error_message": {
+                        "type": "string",
+                        "nullable": true,
+                        "description": "Any error message from a failed analysis."
                       }
                     }
                   }
@@ -1282,6 +1351,75 @@
           },
           "500": {
             "description": "Server error while retrieving data."
+          }
+        }
+      }
+    },
+    "/organizationskills/{organization_name}": {
+      "get": {
+        "tags": [
+          "Statistics"
+        ],
+        "summary": "Get Organization KU Skills",
+        "description": "Retrieves a summary of 'knowledge skills' for a specific organization. For each Knowledge Unit (KU) found within the organization's repositories, it returns the total number of unique files where the KU was detected and the total number of unique authors who contributed to those files.",
+        "parameters": [
+          {
+            "name": "organization_name",
+            "in": "path",
+            "required": true,
+            "description": "The name of the organization to retrieve skills for.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "apache"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved the skills overview for the organization. Returns an empty array if the organization is not found or has no analysis data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "ku_name": {
+                        "type": "string",
+                        "description": "The name of the Knowledge Unit.",
+                        "example": "K15"
+                      },
+                      "total_files": {
+                        "type": "integer",
+                        "description": "The total count of unique files within the organization where this KU was detected.",
+                        "example": 125
+                      },
+                      "total_authors": {
+                        "type": "integer",
+                        "description": "The total count of unique authors who have contributed this KU within the organization.",
+                        "example": 22
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An internal server error occurred while retrieving the data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Failed to retrieve skills for the organization"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }

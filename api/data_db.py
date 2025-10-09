@@ -162,16 +162,37 @@ def delete_repo_from_db(repo_name):
     finally:
         conn.close()
 
-def get_all_repos_from_db():
+
+def get_all_repos_from_db(organization=None):
+    """
+    Ανακτά όλα τα repositories από τη βάση δεδομένων.
+    Αν δοθεί η παράμετρος 'organization', φιλτράρει τα αποτελέσματα
+    ώστε να επιστρέψει μόνο τα repositories του συγκεκριμένου οργανισμού.
+    """
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute('''
+                # Βασικό query
+                base_query = '''
                     SELECT name, url, organization, description, comments, created_at, updated_at, 
                            analysis_status, analysis_start_time, analysis_end_time, 
                            analysis_progress, analysis_error_message
-                    FROM repositories;
-                ''')
+                    FROM repositories
+                '''
+
+                params = []
+
+                # Αν έχει δοθεί οργανισμός, προσθέτουμε το WHERE clause
+                if organization:
+                    base_query += " WHERE organization = %s"
+                    params.append(organization)
+
+                # Προσθέτουμε ταξινόμηση για συνεπή αποτελέσματα
+                base_query += " ORDER BY name;"
+
+                # Εκτελούμε το query με τις παραμέτρους (αν υπάρχουν)
+                cur.execute(base_query, tuple(params))
+
                 rows = cur.fetchall()
                 repos = []
                 for row in rows:
@@ -1252,6 +1273,51 @@ def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None):
 
     except Exception as e:
         logging.error(f"An error occurred while getting KU vectors for all developers: {e}")
+        return None
+    finally:
+        if 'conn' in locals() and conn is not None:
+            conn.close()
+
+def get_ku_skills_by_organization(organization_name):
+    """
+    Για έναν συγκεκριμένο οργανισμό, επιστρέφει για κάθε KU το πλήθος των
+    μοναδικών αρχείων στα οποία εντοπίστηκε και το πλήθος των μοναδικών
+    authors που συνεισέφεραν σε αυτά τα αρχεία.
+    """
+    sql_query = """
+        SELECT
+            ku.key AS ku_name,
+            COUNT(DISTINCT ar.filename) AS total_files,
+            COUNT(DISTINCT ar.author) AS total_authors
+        FROM
+            analysis_results ar
+        JOIN
+            repositories r ON ar.repo_name = r.name,
+            LATERAL jsonb_each_text(ar.detected_kus) AS ku
+        WHERE
+            r.organization = %s
+            AND ku.value = '1'
+        GROUP BY
+            ku_name
+        ORDER BY
+            ku_name;
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(sql_query, (organization_name,))
+        rows = cur.fetchall()
+        cur.close()
+
+        # Μετατροπή των αποτελεσμάτων σε μια λίστα από λεξικά
+        skills_data = [
+            {"ku_name": row[0], "total_files": int(row[1]), "total_authors": int(row[2])}
+            for row in rows
+        ]
+        return skills_data
+
+    except Exception as e:
+        logging.error(f"An error occurred while getting KU skills for organization {organization_name}: {e}")
         return None
     finally:
         if 'conn' in locals() and conn is not None:
