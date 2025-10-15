@@ -1111,7 +1111,7 @@
           "Analysis"
         ],
         "summary": "Get Analysis Results with Optional Filtering",
-        "description": "Retrieves records from the 'analysis_results' table. This single endpoint can return all results or a filtered subset based on an optional date range. If no parameters are provided, the entire table is returned. The start and end months are inclusive.",
+        "description": "Retrieves records from the 'analysis_results' table. This endpoint can return all results or a filtered subset based on an optional date range and/or organization. If no parameters are provided, the entire table is returned. The start and end months are inclusive.",
         "parameters": [
           {
             "name": "start_date",
@@ -1132,6 +1132,16 @@
               "type": "string",
               "example": "2025-12"
             }
+          },
+          {
+            "name": "organization",
+            "in": "query",
+            "required": false,
+            "description": "Optional. The name of the organization to filter results by. If omitted, results from all organizations are included.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "apache"
           }
         ],
         "responses": {

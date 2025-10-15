@@ -926,22 +926,20 @@ def get_entire_analysis_table():
             conn.close()
 
 
-def get_analysis_results(start_date_str=None, end_date_str=None):
+def get_analysis_results(start_date_str=None, end_date_str=None, organization=None):
     """
-    Ανακτά εγγραφές από τον πίνακα analysis_results με προαιρετικό φιλτράρισμα ημερομηνίας.
-    - Αν δεν δοθεί καμία ημερομηνία, επιστρέφει όλες τις εγγραφές.
-    - Αν δοθεί μόνο start_date, επιστρέφει εγγραφές από εκείνη την ημερομηνία και μετά.
-    - Αν δοθεί μόνο end_date, επιστρέφει εγγραφές μέχρι εκείνη την ημερομηνία.
-    - Αν δοθούν και οι δύο, επιστρέφει εγγραφές εντός του εύρους.
+    Ανακτά εγγραφές από τον πίνακα analysis_results με προαιρετικό φιλτράρισμα.
+    - Φιλτράρει με βάση την ημερομηνία έναρξης/λήξης.
+    - Φιλτράρει με βάση τον οργανισμό.
+    - Αν δεν δοθεί κανένα φίλτρο, επιστρέφει όλες τις εγγραφές.
     Επιστρέφει επίσης το πεδίο 'organization' από τον πίνακα 'repositories'.
     """
     try:
-        # --- ΑΛΛΑΓΗ 1: Ενημέρωση του SQL Query για να περιλαμβάνει JOIN και το πεδίο organization ---
         base_query = '''
             SELECT
                 ar.id,
                 ar.repo_name,
-                r.organization, -- ΠΡΟΣΘΗΚΗ: Το πεδίο που θέλουμε από τον πίνακα repositories
+                r.organization,
                 ar.filename,
                 ar.author,
                 ar.timestamp,
@@ -954,30 +952,35 @@ def get_analysis_results(start_date_str=None, end_date_str=None):
                 repositories r ON ar.repo_name = r.name
         '''
 
+        # --- ΑΛΛΑΓΗ 1: Δυναμική κατασκευή των συνθηκών WHERE ---
         conditions = []
         params = []
 
         if start_date_str:
             start_date = datetime.strptime(start_date_str, '%Y-%m')
-            # Χρησιμοποιούμε το alias 'ar' για σαφήνεια
             conditions.append("ar.timestamp >= %s")
             params.append(start_date)
 
         if end_date_str:
             end_date_exclusive = datetime.strptime(end_date_str, '%Y-%m') + relativedelta(months=1)
-            # Χρησιμοποιούμε το alias 'ar' για σαφήνεια
             conditions.append("ar.timestamp < %s")
             params.append(end_date_exclusive)
 
+        # --- ΑΛΛΑΓΗ 2: Προσθήκη της συνθήκης για τον οργανισμό ---
+        if organization:
+            conditions.append("r.organization = %s")
+            params.append(organization)
+
+        # Αν υπάρχει έστω και μία συνθήκη, τις προσθέτουμε στο query
         if conditions:
             base_query += " WHERE " + " AND ".join(conditions)
 
-        # Χρησιμοποιούμε aliases και εδώ για συνέπεια
         base_query += " ORDER BY ar.repo_name, ar.timestamp;"
 
         conn = get_db_connection()
         cur = conn.cursor()
 
+        # Εκτελούμε το query με τις παραμέτρους για ασφάλεια (αποφυγή SQL Injection)
         cur.execute(base_query, tuple(params))
 
         rows = cur.fetchall()
@@ -985,16 +988,14 @@ def get_analysis_results(start_date_str=None, end_date_str=None):
 
         all_results = []
         for row in rows:
-            # --- ΑΛΛΑΓΗ 2: Ενημέρωση της αποσυμπίεσης του tuple για να περιλαμβάνει το organization ---
-            (id, repo_name, organization, filename, author, timestamp, sha, detected_kus, elapsed_time) = row
+            (id, repo_name, org, filename, author, timestamp, sha, detected_kus, elapsed_time) = row
 
             timestamp_str = timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
 
-            # --- ΑΛΛΑΓΗ 3: Προσθήκη του organization στο τελικό λεξικό ---
             all_results.append({
                 "id": id,
                 "repo_name": repo_name,
-                "organization": organization,  # <-- Η νέα πληροφορία
+                "organization": org,
                 "filename": filename,
                 "author": author,
                 "timestamp": timestamp_str,

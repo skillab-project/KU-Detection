@@ -541,12 +541,15 @@ def init_routes(app):
         Μπορεί να φιλτραριστεί με προαιρετικές παραμέτρους query:
         - start_date (YYYY-MM)
         - end_date (YYYY-MM)
+        - organization (π.χ. 'apache', 'eclipse')
         Αν δεν δοθούν παράμετροι, επιστρέφει όλα τα δεδομένα.
         """
+        # --- ΑΛΛΑΓΗ 1: Ανάκτηση της νέας παραμέτρου 'organization' ---
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
+        organization = request.args.get('organization')  # <-- ΝΕΑ ΓΡΑΜΜΗ
 
-        # Έλεγχος της μορφής των παραμέτρων, μόνο αν έχουν δοθεί
+        # Έλεγχος της μορφής των ημερομηνιών, μόνο αν έχουν δοθεί
         try:
             if start_date:
                 datetime.datetime.strptime(start_date, '%Y-%m')
@@ -556,8 +559,8 @@ def init_routes(app):
             return jsonify({"error": "Invalid date format. Please use YYYY-MM."}), 400
 
         try:
-            # Κλήση της νέας, ευέλικτης συνάρτησης
-            data = get_analysis_results(start_date, end_date)
+            # --- ΑΛΛΑΓΗ 2: Πέρασμα της παραμέτρου 'organization' στη συνάρτηση ---
+            data = get_analysis_results(start_date, end_date, organization)
 
             if data is not None:
                 return jsonify(data), 200
