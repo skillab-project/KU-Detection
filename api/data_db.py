@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 from collections import defaultdict
 from dateutil.relativedelta import relativedelta
+import subprocess
 
 # --- Βιβλιοθήκες για ML και Ανάλυση ---
 from sklearn.cluster import KMeans
@@ -125,7 +126,58 @@ def create_tables():
         if conn is not None:
             conn.close()
 
-# --- ΔΙΟΡΘΩΣΗ: Η συνάρτηση πλέον δέχεται τον οργανισμό ως παράμετρο ---
+
+def initialize_database():
+    conn = None
+    cur = None
+    sql_file_path = ""
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Έλεγχος αν υπάρχουν δεδομένα
+        cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'repositories');")
+        tables_exist = cur.fetchone()[0]
+
+        if tables_exist:
+            cur.execute("SELECT COUNT(*) FROM repositories;")
+            count = cur.fetchone()[0]
+            if count > 0:
+                logging.info("Database already exists and is populated. Skipping initialization.")
+                return
+
+        # ΚΡΙΣΙΜΟ: Κλείνουμε cursor και μεταβαίνουμε σε autocommit
+        cur.close()
+        conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+
+        logging.info("Database is empty. Executing full setup script from 'init_data.sql'...")
+        sql_file_path = os.path.join(os.path.dirname(__file__), '..', 'db', 'init_data.sql')
+
+        with open(sql_file_path, 'r', encoding='utf-8') as f:
+            sql_script_content = f.read()
+
+        # Νέος cursor για autocommit mode
+        cur = conn.cursor()
+        cur.execute(sql_script_content)
+
+        logging.info("Database initialization complete.")
+
+    except FileNotFoundError:
+        logging.critical(f"The setup file was not found: {sql_file_path}")
+
+    except psycopg2.Error as e:
+        logging.exception(f"PostgreSQL error: {e.pgerror}")
+
+    except Exception as e:
+        logging.exception("Unexpected error during database initialization:")
+
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.close()
+
 def save_repo_to_db(name, url=None, organization=None, description=None, comments=None):
     try:
         conn = get_db_connection()
@@ -273,15 +325,23 @@ def get_commits_from_db(repo_name):
         conn.close()
 
 
-def getdetected_kus():
+def getdetected_kus(organization=None):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        cur.execute('''
-            SELECT detected_kus, author
-            FROM analysis_results
-        ''')
+        if organization:
+            cur.execute('''
+                SELECT ar.detected_kus, ar.author
+                FROM analysis_results ar
+                JOIN repositories r ON ar.repo_name = r.name
+                WHERE r.organization = %s
+            ''', (organization,))
+        else:
+            cur.execute('''
+                SELECT detected_kus, author
+                FROM analysis_results
+            ''')
 
         rows = cur.fetchall()
 
@@ -383,17 +443,23 @@ def get_analysis_from_db(repo_name):
         conn.close()
 
 
-def get_allanalysis_from_db():
+def get_allanalysis_from_db(organization=None):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Εκτέλεση του query για ανάκτηση όλων των δεδομένων από τον πίνακα analysis_results
-        cur.execute('''
+        base_query = '''
             SELECT ar.filename, ar.author, ar.timestamp, ar.sha, ar.detected_kus, ar.elapsed_time
             FROM analysis_results ar
-            JOIN repositories r ON ar.repo_name = r.name;
-        ''')
+            JOIN repositories r ON ar.repo_name = r.name
+        '''
+
+        params = []
+        if organization:
+            base_query += " WHERE r.organization = %s"
+            params.append(organization)
+
+        cur.execute(base_query, tuple(params))
         rows = cur.fetchall()
 
         # Λίστα για αποθήκευση των αποτελεσμάτων
@@ -619,25 +685,35 @@ def analyze_repository_background(repo_name, files):
     update_analysis_status(repo_name, 'completed', start_time=start_time, end_time=end_time, progress=100)
     yield f"data: {json.dumps({'progress': 100, 'message': 'Analysis completed'})}\n\n"
 
-def get_ku_counts_from_db():
-    sql_query = """
+def get_ku_counts_from_db(organization=None):
+    base_query = """
         SELECT
             ku.key AS ku_id,
             COUNT(*) AS ku_count
         FROM
-            analysis_results,
-            LATERAL jsonb_each_text(detected_kus) AS ku
+            analysis_results ar
+        JOIN
+            repositories r ON ar.repo_name = r.name,
+            LATERAL jsonb_each_text(ar.detected_kus) AS ku
         WHERE
             ku.value = '1'
+    """
+    params = []
+    if organization:
+        base_query += " AND r.organization = %s"
+        params.append(organization)
+
+    base_query += """
         GROUP BY
             ku_id
         ORDER BY
             ku_count DESC;
     """
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(sql_query)
+        cur.execute(base_query, tuple(params))
         rows = cur.fetchall()
         cur.close()
         ku_counts = [{"ku_id": row[0], "count": int(row[1])} for row in rows]
@@ -649,12 +725,13 @@ def get_ku_counts_from_db():
         if 'conn' in locals() and conn is not None:
             conn.close()
 
-def get_organization_project_counts():
+def get_organization_project_counts(organization=None):
     """
     Ανακτά από τη βάση δεδομένων το πλήθος των projects ανά οργανισμό,
     βασιζόμενο στην στήλη 'organization'.
+    Αν δοθεί η παράμετρος organization, φιλτράρει μόνο για αυτόν.
     """
-    sql_query = """
+    base_query = """
         SELECT
             organization,
             COUNT(*) AS project_count
@@ -662,15 +739,23 @@ def get_organization_project_counts():
             repositories
         WHERE
             organization IS NOT NULL AND organization != ''
+    """
+    params = []
+    if organization:
+        base_query += " AND organization = %s"
+        params.append(organization)
+
+    base_query += """
         GROUP BY
             organization
         ORDER BY
             project_count DESC;
     """
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(sql_query)
+        cur.execute(base_query, tuple(params))
         rows = cur.fetchall()
         cur.close()
 
@@ -684,11 +769,12 @@ def get_organization_project_counts():
         if 'conn' in locals() and conn is not None:
             conn.close()
 
-def get_ku_counts_by_organization():
+def get_ku_counts_by_organization(organization=None):
     """
     Επιστρέφει τα στατιστικά των KUs ομαδοποιημένα ανά οργανισμό.
+    Αν δοθεί η παράμετρος organization, φιλτράρει μόνο για αυτόν.
     """
-    sql_query = """
+    base_query = """
         SELECT
             r.organization,
             ku.key AS ku_id,
@@ -700,15 +786,23 @@ def get_ku_counts_by_organization():
             LATERAL jsonb_each_text(ar.detected_kus) AS ku
         WHERE
             r.organization IS NOT NULL AND r.organization != '' AND ku.value = '1'
+    """
+    params = []
+    if organization:
+        base_query += " AND r.organization = %s"
+        params.append(organization)
+
+    base_query += """
         GROUP BY
             r.organization, ku_id
         ORDER BY
             r.organization, ku_count DESC;
     """
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(sql_query)
+        cur.execute(base_query, tuple(params))
         rows = cur.fetchall()
         cur.close()
 
@@ -733,11 +827,12 @@ def get_ku_counts_by_organization():
         if 'conn' in locals() and conn is not None:
             conn.close()
 
-def get_monthly_analysis_counts_by_org():
+def get_monthly_analysis_counts_by_org(organization=None):
     """
     Επιστρέφει το πλήθος των αναλύσεων ανά μήνα, ομαδοποιημένο ανά οργανισμό.
+    Αν δοθεί η παράμετρος organization, φιλτράρει μόνο για αυτόν.
     """
-    sql_query = """
+    base_query = """
         SELECT
             r.organization,
             DATE_TRUNC('month', ar.timestamp)::date AS analysis_month,
@@ -748,15 +843,23 @@ def get_monthly_analysis_counts_by_org():
             repositories r ON ar.repo_name = r.name
         WHERE
             r.organization IS NOT NULL AND r.organization != ''
+    """
+    params = []
+    if organization:
+        base_query += " AND r.organization = %s"
+        params.append(organization)
+
+    base_query += """
         GROUP BY
             r.organization, analysis_month
         ORDER BY
             r.organization, analysis_month;
     """
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(sql_query)
+        cur.execute(base_query, tuple(params))
         rows = cur.fetchall()
         cur.close()
 
@@ -781,30 +884,41 @@ def get_monthly_analysis_counts_by_org():
         if 'conn' in locals() and conn is not None:
             conn.close()
 
-def get_ku_counts_per_repository():
+def get_ku_counts_per_repository(organization=None):
     """
     Ανακτά το πλήθος των commits για κάθε KU, ομαδοποιημένο ανά repository.
+    Αν δοθεί η παράμετρος organization, φιλτράρει μόνο τα repos αυτού του οργανισμού.
     Επιστρέφει ένα λεξικό της μορφής:
     { 'repo_name_1': {'KU1': 10, 'KU5': 3}, 'repo_name_2': {'KU1': 5, 'KU8': 12} }
     """
-    sql_query = """
+    base_query = """
         SELECT
-            repo_name,
+            ar.repo_name,
             ku.key AS ku_id,
             COUNT(*) as ku_count
         FROM
-            analysis_results,
-            LATERAL jsonb_each_text(detected_kus) AS ku
+            analysis_results ar
+        JOIN
+            repositories r ON ar.repo_name = r.name,
+            LATERAL jsonb_each_text(ar.detected_kus) AS ku
         WHERE
             ku.value = '1'
-        GROUP BY
-            repo_name, ku_id;
     """
+    params = []
+    if organization:
+        base_query += " AND r.organization = %s"
+        params.append(organization)
+
+    base_query += """
+        GROUP BY
+            ar.repo_name, ku_id;
+    """
+
     repos_with_ku_counts = defaultdict(dict)
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(sql_query)
+        cur.execute(base_query, tuple(params))
         rows = cur.fetchall()
         cur.close()
 
@@ -821,14 +935,15 @@ def get_ku_counts_per_repository():
             conn.close()
 
 
-def cluster_repositories_by_kus(num_clusters: int):
+def cluster_repositories_by_kus(num_clusters: int, organization=None):
     """
     Ομαδοποιεί τα repositories χρησιμοποιώντας K-Means πάνω σε TF-IDF-weighted KU counts
     και μειώνει τις διαστάσεις με PCA για 2D οπτικοποίηση.
+    Αν δοθεί η παράμετρος organization, φιλτράρει μόνο τα repos αυτού του οργανισμού.
     """
     try:
         # 1. Ανάκτηση του πλήθους των KUs για κάθε repository
-        repos_data = get_ku_counts_per_repository() # <--- ΣΩΣΤΗ ΚΛΗΣΗ
+        repos_data = get_ku_counts_per_repository(organization=organization)
         if not repos_data or len(repos_data) < num_clusters:
             raise ValueError("Not enough repositories with detected KUs to form the requested number of clusters.")
 
@@ -952,7 +1067,6 @@ def get_analysis_results(start_date_str=None, end_date_str=None, organization=No
                 repositories r ON ar.repo_name = r.name
         '''
 
-        # --- ΑΛΛΑΓΗ 1: Δυναμική κατασκευή των συνθηκών WHERE ---
         conditions = []
         params = []
 
@@ -966,7 +1080,6 @@ def get_analysis_results(start_date_str=None, end_date_str=None, organization=No
             conditions.append("ar.timestamp < %s")
             params.append(end_date_exclusive)
 
-        # --- ΑΛΛΑΓΗ 2: Προσθήκη της συνθήκης για τον οργανισμό ---
         if organization:
             conditions.append("r.organization = %s")
             params.append(organization)
@@ -1029,7 +1142,7 @@ def calculate_risks(organization=None):
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # --- ΑΛΛΑΓΗ 1: Δυναμική κατασκευή των SQL queries ---
+        # Δυναμική κατασκευή των SQL queries
         # Βασικό query που ενώνει τους δύο πίνακες
         base_query_select = '''
             SELECT ar.filename, ar.author, ar.detected_kus
@@ -1070,7 +1183,6 @@ def calculate_risks(organization=None):
             }
 
         # --- Βήμα 2: Δόμηση πληροφορίας (Aggregation) ---
-        # (Η υπόλοιπη λογική παραμένει ακριβώς η ίδια)
         knowledge_units = defaultdict(lambda: {'freq': 0, 'authors': set()})
         author_ku_map = defaultdict(set)
 
@@ -1136,41 +1248,50 @@ def calculate_risks(organization=None):
     except Exception as e:
         logging.exception("An error occurred during risk calculation")
         return {"error": str(e)}
-def get_ku_counts_by_developer(developer_name):
+
+def get_ku_counts_by_developer(developer_name, organization=None):
     """
     Για έναν συγκεκριμένο προγραμματιστή, επιστρέφει ένα λεξικό με όλα τα KUs
     (K1 έως K27) και την τιμή τους να είναι το πλήθος των *μοναδικών αρχείων*
     στα οποία εντοπίστηκε το καθένα. Τα KUs που δεν βρέθηκαν έχουν τιμή 0.
+    Αν δοθεί η παράμετρος organization, φιλτράρει μόνο τα repos αυτού του οργανισμού.
     """
     # 1. Δημιουργούμε το τελικό λεξικό με όλα τα KUs αρχικοποιημένα στο 0.
-    # Αυτό εγγυάται ότι η απάντηση θα έχει πάντα την ίδια δομή.
     all_kus = {f"K{i}": 0 for i in range(1, 28)}
 
-    # 2. Το SQL query που θα "ξεδιπλώσει" το JSON και θα μετρήσει
-    #    τα μοναδικά αρχεία για τα KUs που βρέθηκαν.
-    sql_query = """
+    # 2. Δυναμική κατασκευή του SQL query
+    base_query = """
         SELECT
             ku.key AS ku_name,
             COUNT(DISTINCT ar.filename) AS file_count
         FROM
-            analysis_results ar,
+            analysis_results ar
+        JOIN
+            repositories r ON ar.repo_name = r.name,
             LATERAL jsonb_each_text(ar.detected_kus) AS ku
         WHERE
             ar.author = %s
             AND ku.value = '1'
+    """
+    params = [developer_name]
+
+    if organization:
+        base_query += " AND r.organization = %s"
+        params.append(organization)
+
+    base_query += """
         GROUP BY
             ku_name;
     """
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        # Περνάμε το όνομα του developer ως παράμετρο για ασφάλεια (αποφυγή SQL Injection)
-        cur.execute(sql_query, (developer_name,))
+        cur.execute(base_query, tuple(params))
         rows = cur.fetchall()
         cur.close()
 
         # 3. Ενημερώνουμε το αρχικό λεξικό με τα αποτελέσματα από τη βάση.
-        #    Μόνο τα KUs που βρέθηκαν θα ενημερωθούν, τα υπόλοιπα θα παραμείνουν 0.
         for ku_name, file_count in rows:
             if ku_name in all_kus:
                 all_kus[ku_name] = 1
@@ -1186,14 +1307,12 @@ def get_ku_counts_by_developer(developer_name):
             conn.close()
 
 
-def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None):
+def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None, organization=None):
     """
     Για όλους τους developers, επιστρέφει μια λίστα με τα repositories
-    στα οποία έχουν συνεισφέρει, φιλτραρισμένη προαιρετικά από ένα χρονικό εύρος.
-    Για κάθε συνδυασμό developer-repository, επιστρέφει το όνομα, τον οργανισμό,
-    και μια λίστα με τα μοναδικά KUs που βρέθηκαν εντός του χρονικού εύρους.
+    στα οποία έχουν συνεισφέρει, φιλτραρισμένη προαιρετικά από ένα χρονικό εύρος
+    και/ή έναν οργανισμό.
     """
-    # --- ΑΛΛΑΓΗ 1: Δυναμική κατασκευή του SQL Query ---
     base_query = """
         SELECT
             ar.author,
@@ -1217,20 +1336,23 @@ def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None):
             conditions.append("ar.timestamp >= %s")
             params.append(start_date)
         except ValueError:
-            # Αν η μορφή είναι λάθος, αγνόησέ την ή χειρίσου το σφάλμα
             logging.warning(f"Invalid start_date format provided: {start_date_str}")
             pass
 
     # Προσθήκη συνθήκης για την τελική ημερομηνία
     if end_date_str:
         try:
-            # Για να συμπεριλάβουμε ολόκληρο τον μήνα, θέτουμε το όριο στην αρχή του επόμενου μήνα
             end_date_exclusive = datetime.strptime(end_date_str, '%Y-%m') + relativedelta(months=1)
             conditions.append("ar.timestamp < %s")
             params.append(end_date_exclusive)
         except ValueError:
             logging.warning(f"Invalid end_date format provided: {end_date_str}")
             pass
+
+    # Προσθήκη συνθήκης για τον οργανισμό
+    if organization:
+        conditions.append("r.organization = %s")
+        params.append(organization)
 
     # Σύνθεση του τελικού query
     if conditions:
@@ -1247,7 +1369,6 @@ def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None):
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # --- ΑΛΛΑΓΗ 2: Εκτέλεση του query με τις παραμέτρους ---
         cur.execute(base_query, tuple(params))
         rows = cur.fetchall()
         cur.close()
@@ -1255,7 +1376,7 @@ def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None):
         results = []
         all_kus_template = {f"K{i}": 0 for i in range(1, 28)}
 
-        for author, repo_name, organization, present_kus_list in rows:
+        for author, repo_name, organization_val, present_kus_list in rows:
             ku_vector = all_kus_template.copy()
 
             if present_kus_list:
@@ -1265,7 +1386,7 @@ def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None):
 
             results.append({
                 "developer_name": author,
-                "organization": organization,
+                "organization": organization_val,
                 "repo_name": repo_name,
                 "ku_vector": ku_vector
             })

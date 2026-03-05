@@ -43,7 +43,7 @@ from core.analysis.codebert_sliding_window import codebert_sliding_window
 from config.settings import CLONED_REPO_BASE_PATH, CODEBERT_BASE_PATH
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, expose_headers=["X-User-Organization"], allow_headers=["Content-Type", "X-User-Organization"])
 
 # Δημιουργία ενός global ThreadPoolExecutor ---
 # Δημιουργούμε τον executor μία φορά όταν ξεκινάει η εφαρμογή.
@@ -156,6 +156,10 @@ def init_routes(app):
     # ( /commits, /repos, /detected_kus, etc. )
     @app.route("/commits", methods=["POST"])
     def list_commits():
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         data = request.get_json()
         repo_url = data.get("repo_url")
         commit_limit = data.get("limit", 50)
@@ -176,14 +180,17 @@ def init_routes(app):
 
     @app.route("/repos", methods=["POST"])
     def create_repo():
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         data = request.json
         repo_name = data.get("repo_name")
         url = data.get("url", "")
-        organization = data.get("organization", None)  # Παίρνουμε τον οργανισμό από το request
         description = data.get("description", "")
         comments = data.get("comments", "")
         try:
-            # Περνάμε τον οργανισμό στη συνάρτηση αποθήκευσης
+            # Ο οργανισμός λαμβάνεται αποκλειστικά από το Header
             save_repo_to_db(repo_name, url, organization, description, comments)
             return jsonify({"message": "Repository created successfully"}), 201
         except Exception as e:
@@ -191,8 +198,12 @@ def init_routes(app):
 
     @app.route("/detected_kus", methods=["GET"])
     def get_detected_kus():
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         try:
-            kus_list = getdetected_kus()
+            kus_list = getdetected_kus(organization=organization)
             if kus_list is not None:
                 return jsonify(kus_list), 200
             else:
@@ -202,13 +213,16 @@ def init_routes(app):
 
     @app.route("/repos/<string:repo_name>", methods=["PUT"])
     def edit_repo(repo_name):
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         data = request.json
         url = data.get("url", "")
-        organization = data.get("organization", None)  # Παίρνουμε τον οργανισμό από το request
         description = data.get("description", "")
         comments = data.get("comments", "")
         try:
-            # Περνάμε τον οργανισμό στη συνάρτηση αποθήκευσης
+            # Ο οργανισμός λαμβάνεται αποκλειστικά από το Header
             save_repo_to_db(repo_name, url, organization, description, comments)
             return jsonify({"message": "Repository updated successfully"}), 200
         except Exception as e:
@@ -216,6 +230,10 @@ def init_routes(app):
 
     @app.route("/timestamps", methods=["GET"])
     def get_timestamps():
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         try:
             repo_name = request.args.get("repo_name")
             if not repo_name:
@@ -229,6 +247,10 @@ def init_routes(app):
 
     @app.route("/historytime", methods=["GET"])
     def historytime():
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         try:
             repo_url = request.args.get("repo_url")
             if not repo_url:
@@ -243,6 +265,10 @@ def init_routes(app):
 
     @app.route("/delete_repo/<string:repo_name>", methods=["DELETE"])
     def delete_repo(repo_name):
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         try:
             delete_repo_from_db(repo_name)
             return jsonify({"message": f"Repository '{repo_name}' and related data deleted successfully"}), 200
@@ -252,17 +278,16 @@ def init_routes(app):
     @app.route("/repos", methods=["GET"])
     def list_repos():
         """
-        Επιστρέφει μια λίστα με τα αποθετήρια (repositories).
-        Μπορεί να φιλτραριστεί με την προαιρετική παράμετρο 'organization'.
-        Παράδειγμα: /repos?organization=apache
+        Επιστρέφει μια λίστα με τα αποθετήρια (repositories) του οργανισμού
+        που ορίζεται στο header X-User-Organization.
         """
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         try:
-            # Λαμβάνουμε την προαιρετική παράμετρο 'organization' από το URL query
-            organization = request.args.get('organization')
-
-            # Περνάμε την παράμετρο (που μπορεί να είναι None) στη συνάρτηση της βάσης
+            # Ο οργανισμός λαμβάνεται αποκλειστικά από το Header
             repos = get_all_repos_from_db(organization=organization)
-
             return jsonify(repos), 200
         except Exception as e:
             logging.exception("Error in /repos endpoint")
@@ -271,28 +296,28 @@ def init_routes(app):
     # Configure logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    @app.route("/organizationskills/<string:organization_name>", methods=["GET"])
-    def get_organization_skills(organization_name):
+    @app.route("/organizationskills", methods=["GET"])
+    def get_organization_skills():
         """
-        Επιστρέφει μια σύνοψη των "γνωσιακών δεξιοτήτων" για έναν οργανισμό.
+        Επιστρέφει μια σύνοψη των "γνωσιακών δεξιοτήτων" για τον οργανισμό
+        που ορίζεται στο header X-User-Organization.
         Για κάθε KU, επιστρέφει το συνολικό πλήθος μοναδικών αρχείων και
         μοναδικών authors που σχετίζονται με αυτό.
         """
+        organization_name = request.headers.get('X-User-Organization')
         if not organization_name:
-            return jsonify({"error": "Organization name cannot be empty"}), 400
+            return jsonify({"error": "X-User-Organization header is required"}), 400
 
         try:
             skills_data = get_ku_skills_by_organization(organization_name)
 
             if skills_data is not None:
-                # Επιστρέφει τα δεδομένα ή μια κενή λίστα αν δεν βρεθεί τίποτα
                 return jsonify(skills_data), 200
             else:
-                # Σφάλμα κατά την εκτέλεση του query
                 return jsonify({"error": "Failed to retrieve skills for the organization"}), 500
 
         except Exception as e:
-            logging.exception(f"Error in /organizationskills/{organization_name} endpoint")
+            logging.exception(f"Error in /organizationskills endpoint")
             return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
     @app.route("/ku_risk", methods=["GET"])
@@ -300,14 +325,13 @@ def init_routes(app):
         """
         Calculates and returns the risk associated with each Knowledge Unit (KU).
         The risk is a product of the probability of loss and the impact of that loss.
-        Can be filtered by an optional 'organization' query parameter.
-        Example: /ku_risk?organization=apache
+        Filtered by the organization in X-User-Organization header.
         """
-        try:
-            # --- ΑΛΛΑΓΗ: Ανάκτηση της προαιρετικής παραμέτρου 'organization' ---
-            organization = request.args.get('organization')
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
 
-            # --- ΑΛΛΑΓΗ: Πέρασμα της παραμέτρου στη συνάρτηση υπολογισμού ---
+        try:
             risk_data = calculate_risks(organization=organization)
 
             if "error" in risk_data:
@@ -329,14 +353,13 @@ def init_routes(app):
         """
         Calculates and returns the risk associated with the hypothetical departure
         of each employee, in both absolute and relative terms.
-        Can be filtered by an optional 'organization' query parameter.
-        Example: /employee_risk?organization=apache
+        Filtered by the organization in X-User-Organization header.
         """
-        try:
-            # --- ΑΛΛΑΓΗ: Ανάκτηση της προαιρετικής παραμέτρου 'organization' ---
-            organization = request.args.get('organization')
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
 
-            # --- ΑΛΛΑΓΗ: Πέρασμα της παραμέτρου στη συνάρτηση υπολογισμού ---
+        try:
             risk_data = calculate_risks(organization=organization)
 
             if "error" in risk_data:
@@ -355,6 +378,10 @@ def init_routes(app):
 
     @app.route("/analyze", methods=["GET"])
     def analyze():
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         repo_url = request.args.get("repo_url")
         if not repo_url:
             logging.error("No repository URL provided.")
@@ -394,6 +421,10 @@ def init_routes(app):
 
     @app.route("/analysis_status", methods=["GET"])
     def analysis_status_endpoint():
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         repo_name = request.args.get("repo_name")
         if not repo_name:
             return jsonify({"error": "Repository name is required"}), 400
@@ -406,6 +437,10 @@ def init_routes(app):
 
     @app.route("/analyzedb", methods=["GET"])
     def analyzedb():
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         try:
             repo_name = request.args.get("repo_name")
             if not repo_name:
@@ -419,8 +454,12 @@ def init_routes(app):
 
     @app.route("/analyzeall", methods=["GET"])
     def analyzeall():
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         try:
-            analysis_data = get_allanalysis_from_db()
+            analysis_data = get_allanalysis_from_db(organization=organization)
             if analysis_data is None:
                 return jsonify({"error": "Failed to retrieve all analysis data"}), 500
             return jsonify(analysis_data), 200
@@ -432,20 +471,20 @@ def init_routes(app):
     def get_ku_statistics():
         """
         Επιστρέφει μια λίστα με όλα τα μοναδικά KUs και το πλήθος
-        των εμφανίσεών τους σε όλα τα projects.
+        των εμφανίσεών τους για τον οργανισμό του header.
         """
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         try:
-            # Κάλεσε τη νέα συνάρτηση που έφτιαξες στο data_db.py
-            ku_counts = get_ku_counts_from_db()
+            ku_counts = get_ku_counts_from_db(organization=organization)
 
             if ku_counts is not None:
-                # Αν όλα πήγαν καλά, στείλε τα δεδομένα ως JSON
                 return jsonify(ku_counts), 200
             else:
-                # Αν η συνάρτηση επέστρεψε None (π.χ. λόγω σφάλματος)
                 return jsonify({"error": "Failed to retrieve KU statistics"}), 500
         except Exception as e:
-            # Γενικό σφάλμα
             logging.exception("Error in /ku_statistics endpoint")
             return jsonify({"error": str(e)}), 500
 
@@ -455,9 +494,12 @@ def init_routes(app):
         Επιστρέφει μια λίστα με τα ονόματα των οργανισμών (π.χ. 'apache')
         και τον αριθμό των projects που έχουμε αποθηκευμένα για τον καθένα.
         """
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         try:
-            # Κάλεσε τη νέα συνάρτηση από το data_db.py
-            org_counts = get_organization_project_counts()
+            org_counts = get_organization_project_counts(organization=organization)
 
             if org_counts is not None:
                 return jsonify(org_counts), 200
@@ -470,11 +512,15 @@ def init_routes(app):
     @app.route("/ku_by_organization", methods=["GET"])
     def get_ku_by_organization_stats():
         """
-        Επιστρέφει μια λίστα οργανισμών, και για τον καθένα, μια λίστα
-        με τα KUs που εντοπίστηκαν στα projects του και το πλήθος τους.
+        Επιστρέφει τα KUs που εντοπίστηκαν στα projects του οργανισμού
+        και το πλήθος τους.
         """
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         try:
-            data = get_ku_counts_by_organization()
+            data = get_ku_counts_by_organization(organization=organization)
             if data is not None:
                 return jsonify(data), 200
             else:
@@ -486,11 +532,15 @@ def init_routes(app):
     @app.route("/monthly_analysis_stats", methods=["GET"])
     def get_monthly_analysis_statistics():
         """
-        Επιστρέφει μια λίστα οργανισμών, και για τον καθένα, το πλήθος
-        των αναλύσεων που έγιναν ανά μήνα στα projects του.
+        Επιστρέφει το πλήθος των αναλύσεων που έγιναν ανά μήνα
+        στα projects του οργανισμού.
         """
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         try:
-            data = get_monthly_analysis_counts_by_org()
+            data = get_monthly_analysis_counts_by_org(organization=organization)
             if data is not None:
                 return jsonify(data), 200
             else:
@@ -506,6 +556,10 @@ def init_routes(app):
         Δέχεται ένα JSON body με το κλειδί 'num_clusters'.
         Example: {"num_clusters": 5}
         """
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         data = request.get_json()
         if not data or "num_clusters" not in data:
             return jsonify({"error": "Missing 'num_clusters' in request body"}), 400
@@ -518,17 +572,14 @@ def init_routes(app):
             return jsonify({"error": "'num_clusters' must be an integer"}), 400
 
         try:
-            # Κάλεσε τη νέα συνάρτηση που εκτελεί την ομαδοποίηση
-            clustered_data = cluster_repositories_by_kus(num_clusters)
+            clustered_data = cluster_repositories_by_kus(num_clusters, organization=organization)
 
             if clustered_data is not None:
                 return jsonify(clustered_data), 200
             else:
-                # Γενικό σφάλμα αν η συνάρτηση επέστρεψε None για άγνωστο λόγο
                 return jsonify({"error": "Failed to perform clustering due to an internal error"}), 500
 
         except ValueError as ve:
-            # Πιάνει το σφάλμα για λίγα repositories (π.χ. ζητάς 5 clusters ενώ έχεις μόνο 3 repos)
             return jsonify({"error": str(ve)}), 400
         except Exception as e:
             logging.exception("Error in /cluster_repos endpoint")
@@ -538,16 +589,17 @@ def init_routes(app):
     def get_analysis_results_endpoint():
         """
         Επιστρέφει τα δεδομένα του πίνακα analysis_results.
-        Μπορεί να φιλτραριστεί με προαιρετικές παραμέτρους query:
+        Φιλτράρεται από τον οργανισμό στο header X-User-Organization.
+        Μπορεί να φιλτραριστεί επίσης με προαιρετικές παραμέτρους query:
         - start_date (YYYY-MM)
         - end_date (YYYY-MM)
-        - organization (π.χ. 'apache', 'eclipse')
-        Αν δεν δοθούν παράμετροι, επιστρέφει όλα τα δεδομένα.
         """
-        # --- ΑΛΛΑΓΗ 1: Ανάκτηση της νέας παραμέτρου 'organization' ---
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-        organization = request.args.get('organization')  # <-- ΝΕΑ ΓΡΑΜΜΗ
 
         # Έλεγχος της μορφής των ημερομηνιών, μόνο αν έχουν δοθεί
         try:
@@ -559,7 +611,7 @@ def init_routes(app):
             return jsonify({"error": "Invalid date format. Please use YYYY-MM."}), 400
 
         try:
-            # --- ΑΛΛΑΓΗ 2: Πέρασμα της παραμέτρου 'organization' στη συνάρτηση ---
+            # Ο οργανισμός λαμβάνεται αποκλειστικά από το Header
             data = get_analysis_results(start_date, end_date, organization)
 
             if data is not None:
@@ -578,18 +630,19 @@ def init_routes(app):
         Η απάντηση είναι ένα JSON object με όλα τα KUs (K1-K27) και σε πόσα
         μοναδικά αρχεία βρέθηκε το καθένα για τον συγκεκριμένο author.
         """
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         if not developer_name:
             return jsonify({"error": "Developer name cannot be empty"}), 400
 
         try:
-            # Καλούμε τη συνάρτηση που φτιάξαμε στο data_db.py
-            developer_data = get_ku_counts_by_developer(developer_name)
+            developer_data = get_ku_counts_by_developer(developer_name, organization=organization)
 
             if developer_data is not None:
-                # Αν η συνάρτηση εκτελεστεί επιτυχώς, επιστρέφει το λεξικό
                 return jsonify(developer_data), 200
             else:
-                # Αν η συνάρτηση επέστρεψε None (π.χ. λόγω σφάλματος στη βάση)
                 return jsonify({"error": "Failed to retrieve statistics for the developer"}), 500
 
         except Exception as e:
@@ -606,14 +659,14 @@ def init_routes(app):
         Μπορεί να φιλτραριστεί με προαιρετικές παραμέτρους query:
         - start_date (YYYY-MM)
         - end_date (YYYY-MM)
-
-        Αν δεν δοθούν παράμετροι, επιστρέφει όλα τα δεδομένα.
         """
-        # --- ΑΛΛΑΓΗ 1: Ανάκτηση των προαιρετικών παραμέτρων ---
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
 
-        # --- ΑΛΛΑΓΗ 2: Βασικός έλεγχος της μορφής των ημερομηνιών ---
         try:
             if start_date:
                 datetime.datetime.strptime(start_date, '%Y-%m')
@@ -623,8 +676,7 @@ def init_routes(app):
             return jsonify({"error": "Invalid date format. Please use YYYY-MM."}), 400
 
         try:
-            # --- ΑΛΛΑΓΗ 3: Κλήση της συνάρτησης με τις παραμέτρους ---
-            all_developer_data = get_all_developer_ku_vectors(start_date, end_date)
+            all_developer_data = get_all_developer_ku_vectors(start_date, end_date, organization=organization)
 
             if all_developer_data is not None:
                 return jsonify(all_developer_data), 200
