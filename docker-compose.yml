@@ -13,6 +13,7 @@ services:
       - DB_NAME=test
       - DB_USER=root
       - DB_PASSWORD=root
+    restart: unless-stopped
     ports:
       - '5000:5000'
     networks:
@@ -30,6 +31,7 @@ services:
     volumes:
       - ku_detection_postgresql:/var/lib/postgresql
       - ku_detection_postgresql_data:/var/lib/postgresql/data
+    restart: unless-stopped
     ports:
       - '5430:5432'
     networks:
@@ -49,3 +51,4 @@ volumes:
 networks:
   shared-net:
     external: true
+
