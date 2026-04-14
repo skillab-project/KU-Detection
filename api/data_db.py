@@ -10,6 +10,8 @@ import numpy as np
 from collections import defaultdict
 from dateutil.relativedelta import relativedelta
 import subprocess
+import math
+from scipy.stats import binom  # <-- ΝΕΟ import
 
 # --- Βιβλιοθήκες για ML και Ανάλυση ---
 from sklearn.cluster import KMeans
@@ -136,7 +138,6 @@ def initialize_database():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Έλεγχος αν υπάρχουν δεδομένα
         cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'repositories');")
         tables_exist = cur.fetchone()[0]
 
@@ -147,7 +148,6 @@ def initialize_database():
                 logging.info("Database already exists and is populated. Skipping initialization.")
                 return
 
-        # ΚΡΙΣΙΜΟ: Κλείνουμε cursor και μεταβαίνουμε σε autocommit
         cur.close()
         conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
 
@@ -157,7 +157,6 @@ def initialize_database():
         with open(sql_file_path, 'r', encoding='utf-8') as f:
             sql_script_content = f.read()
 
-        # Νέος cursor για autocommit mode
         cur = conn.cursor()
         cur.execute(sql_script_content)
 
@@ -216,15 +215,9 @@ def delete_repo_from_db(repo_name):
 
 
 def get_all_repos_from_db(organization=None):
-    """
-    Ανακτά όλα τα repositories από τη βάση δεδομένων.
-    Αν δοθεί η παράμετρος 'organization', φιλτράρει τα αποτελέσματα
-    ώστε να επιστρέψει μόνο τα repositories του συγκεκριμένου οργανισμού.
-    """
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
-                # Βασικό query
                 base_query = '''
                     SELECT name, url, organization, description, comments, created_at, updated_at, 
                            analysis_status, analysis_start_time, analysis_end_time, 
@@ -234,15 +227,12 @@ def get_all_repos_from_db(organization=None):
 
                 params = []
 
-                # Αν έχει δοθεί οργανισμός, προσθέτουμε το WHERE clause
                 if organization:
                     base_query += " WHERE organization = %s"
                     params.append(organization)
 
-                # Προσθέτουμε ταξινόμηση για συνεπή αποτελέσματα
                 base_query += " ORDER BY name;"
 
-                # Εκτελούμε το query με τις παραμέτρους (αν υπάρχουν)
                 cur.execute(base_query, tuple(params))
 
                 rows = cur.fetchall()
@@ -304,7 +294,6 @@ def get_commits_from_db(repo_name):
         rows = cur.fetchall()
         cur.close()
 
-        # Convert the list of tuples to a list of dictionaries
         commits = []
         for row in rows:
             commit = {
@@ -396,7 +385,6 @@ def get_analysis_from_db(repo_name):
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Εκτέλεση του query για ανάκτηση των δεδομένων
         cur.execute('''
             SELECT filename, author, timestamp, sha, detected_kus, elapsed_time
             FROM analysis_results
@@ -404,23 +392,18 @@ def get_analysis_from_db(repo_name):
         ''', (repo_name,))
         rows = cur.fetchall()
 
-        # Λίστα για αποθήκευση των αποτελεσμάτων
         analysis_data = []
 
-        # Επεξεργασία των δεδομένων
         for row in rows:
             filename, author, timestamp, sha, detected_kus, elapsed_time = row
 
-            # Αν η στήλη detected_kus είναι JSON string, κάνουμε deserialization
             if isinstance(detected_kus, str):
                 detected_kus_deserialized = json.loads(detected_kus)
             else:
-                detected_kus_deserialized = detected_kus  # Είναι ήδη αντικείμενο Python
+                detected_kus_deserialized = detected_kus
 
-            # Μετατροπή του timestamp αν χρειάζεται
             timestamp_deserialized = datetime.fromisoformat(timestamp) if isinstance(timestamp, str) else timestamp
 
-            # Προσθήκη του λεξικού στη λίστα
             analysis_data.append({
                 "filename": filename,
                 "author": author,
@@ -432,7 +415,6 @@ def get_analysis_from_db(repo_name):
 
         cur.close()
 
-        # Επιστροφή της λίστας αποτελεσμάτων (analysis_data) ως απάντηση
         return analysis_data
 
     except Exception as e:
@@ -462,23 +444,18 @@ def get_allanalysis_from_db(organization=None):
         cur.execute(base_query, tuple(params))
         rows = cur.fetchall()
 
-        # Λίστα για αποθήκευση των αποτελεσμάτων
         analysis_data = []
 
-        # Επεξεργασία των δεδομένων
         for row in rows:
             filename, author, timestamp, sha, detected_kus, elapsed_time = row
 
-            # Αν η στήλη detected_kus είναι JSON string, κάνουμε deserialization
             if isinstance(detected_kus, str):
                 detected_kus_deserialized = json.loads(detected_kus)
             else:
-                detected_kus_deserialized = detected_kus  # Είναι ήδη αντικείμενο Python
+                detected_kus_deserialized = detected_kus
 
-            # Μετατροπή του timestamp αν χρειάζεται σε string ISO format
             timestamp_str = timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
 
-            # Προσθήκη του λεξικού στη λίστα
             analysis_data.append({
                 "filename": filename,
                 "author": author,
@@ -490,7 +467,6 @@ def get_allanalysis_from_db(organization=None):
 
         cur.close()
 
-        # Επιστροφή της λίστας αποτελεσμάτων (analysis_data) ως απάντηση
         return analysis_data
 
     except Exception as e:
@@ -502,10 +478,9 @@ def get_allanalysis_from_db(organization=None):
 
 def get_commits_timestamps_from_db(repo_name):
     try:
-        conn = get_db_connection()  # Σύνδεση με τη βάση δεδομένων
+        conn = get_db_connection()
         cur = conn.cursor()
 
-        # Εκτέλεση του query για να πάρουμε μοναδικά timestamps από τα commits
         cur.execute('''
             SELECT DISTINCT timestamp
             FROM analysis_results
@@ -516,22 +491,20 @@ def get_commits_timestamps_from_db(repo_name):
         rows = cur.fetchall()
         cur.close()
 
-        # Επιστρέφουμε μια λίστα με τα timestamps
-        timestamps = [row[0].isoformat() for row in rows]  # row[0] είναι το timestamp
+        timestamps = [row[0].isoformat() for row in rows]
 
         return timestamps
     except Exception as e:
         print(f"An error occurred: {e}")
         return None
     finally:
-        conn.close()  # Κλείνουμε τη σύνδεση
+        conn.close()
 
 def get_analysis_withsha_db(sha):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Εκτέλεση του query για ανάκτηση των δεδομένων
         cur.execute('''
             SELECT filename, author, timestamp, sha, detected_kus, elapsed_time
             FROM analysis_results
@@ -539,23 +512,18 @@ def get_analysis_withsha_db(sha):
         ''', (sha,))
         rows = cur.fetchall()
 
-        # Λίστα για αποθήκευση των αποτελεσμάτων
         analysis_data = []
 
-        # Επεξεργασία των δεδομένων
         for row in rows:
             filename, author, timestamp, sha, detected_kus, elapsed_time = row
 
-            # Αν η στήλη detected_kus είναι JSON string, κάνουμε deserialization
             if isinstance(detected_kus, str):
                 detected_kus_deserialized = json.loads(detected_kus)
             else:
-                detected_kus_deserialized = detected_kus  # Είναι ήδη αντικείμενο Python
+                detected_kus_deserialized = detected_kus
 
-            # Μετατροπή του timestamp αν χρειάζεται
             timestamp_deserialized = datetime.fromisoformat(timestamp) if isinstance(timestamp, str) else timestamp
 
-            # Προσθήκη του λεξικού στη λίστα
             analysis_data.append({
                 "filename": filename,
                 "author": author,
@@ -567,7 +535,6 @@ def get_analysis_withsha_db(sha):
 
         cur.close()
 
-        # Επιστροφή της λίστας αποτελεσμάτων (analysis_data) ως απάντηση
         return analysis_data
 
     except Exception as e:
@@ -658,16 +625,12 @@ def analyze_repository_background(repo_name, files):
             analyzed_files_count += 1
             logging.info(f"Successfully analyzed file {analyzed_files_count}/{total_files}: {file.filename}")
 
-            # Αποθήκευση αποτελέσματος αμέσως μετά την ανάλυση
             save_analysis_to_db(repo_name, file_data)
 
-
-            # Update progress
             progress = int((analyzed_files_count / total_files) * 100)
             update_analysis_status(repo_name, 'in-progress', start_time=start_time, progress=progress)
 
-            # Send progress and data update to frontend every file
-            print(f"Yielding: {json.dumps({'progress': progress, 'file_data': file_data})}")  # Debugging line
+            print(f"Yielding: {json.dumps({'progress': progress, 'file_data': file_data})}")
             yield f"data: {json.dumps({'progress': progress, 'file_data': file_data})}\n\n"
 
         except Exception as e:
@@ -678,8 +641,6 @@ def analyze_repository_background(repo_name, files):
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
             return
 
-    # Save results to the database
-    #save_analysis_to_db(repo_name, analysis_results)
     end_time = datetime.datetime.now()
     logging.info(f"Analysis completed for repository: {repo_name}. Total files analyzed: {len(analysis_results)}")
     update_analysis_status(repo_name, 'completed', start_time=start_time, end_time=end_time, progress=100)
@@ -726,11 +687,6 @@ def get_ku_counts_from_db(organization=None):
             conn.close()
 
 def get_organization_project_counts(organization=None):
-    """
-    Ανακτά από τη βάση δεδομένων το πλήθος των projects ανά οργανισμό,
-    βασιζόμενο στην στήλη 'organization'.
-    Αν δοθεί η παράμετρος organization, φιλτράρει μόνο για αυτόν.
-    """
     base_query = """
         SELECT
             organization,
@@ -770,10 +726,6 @@ def get_organization_project_counts(organization=None):
             conn.close()
 
 def get_ku_counts_by_organization(organization=None):
-    """
-    Επιστρέφει τα στατιστικά των KUs ομαδοποιημένα ανά οργανισμό.
-    Αν δοθεί η παράμετρος organization, φιλτράρει μόνο για αυτόν.
-    """
     base_query = """
         SELECT
             r.organization,
@@ -828,10 +780,6 @@ def get_ku_counts_by_organization(organization=None):
             conn.close()
 
 def get_monthly_analysis_counts_by_org(organization=None):
-    """
-    Επιστρέφει το πλήθος των αναλύσεων ανά μήνα, ομαδοποιημένο ανά οργανισμό.
-    Αν δοθεί η παράμετρος organization, φιλτράρει μόνο για αυτόν.
-    """
     base_query = """
         SELECT
             r.organization,
@@ -885,12 +833,6 @@ def get_monthly_analysis_counts_by_org(organization=None):
             conn.close()
 
 def get_ku_counts_per_repository(organization=None):
-    """
-    Ανακτά το πλήθος των commits για κάθε KU, ομαδοποιημένο ανά repository.
-    Αν δοθεί η παράμετρος organization, φιλτράρει μόνο τα repos αυτού του οργανισμού.
-    Επιστρέφει ένα λεξικό της μορφής:
-    { 'repo_name_1': {'KU1': 10, 'KU5': 3}, 'repo_name_2': {'KU1': 5, 'KU8': 12} }
-    """
     base_query = """
         SELECT
             ar.repo_name,
@@ -936,39 +878,28 @@ def get_ku_counts_per_repository(organization=None):
 
 
 def cluster_repositories_by_kus(num_clusters: int, organization=None):
-    """
-    Ομαδοποιεί τα repositories χρησιμοποιώντας K-Means πάνω σε TF-IDF-weighted KU counts
-    και μειώνει τις διαστάσεις με PCA για 2D οπτικοποίηση.
-    Αν δοθεί η παράμετρος organization, φιλτράρει μόνο τα repos αυτού του οργανισμού.
-    """
     try:
-        # 1. Ανάκτηση του πλήθους των KUs για κάθε repository
         repos_data = get_ku_counts_per_repository(organization=organization)
         if not repos_data or len(repos_data) < num_clusters:
             raise ValueError("Not enough repositories with detected KUs to form the requested number of clusters.")
 
         repo_names = list(repos_data.keys())
 
-        # 2. Δημιουργία του πίνακα χαρακτηριστικών (με ακατέργαστα counts)
         all_kus = sorted(list(set.union(*(set(d.keys()) for d in repos_data.values()))))
         df = pd.DataFrame(0, index=repo_names, columns=all_kus, dtype=np.int32)
         for repo, ku_counts in repos_data.items():
             for ku, count in ku_counts.items():
                 df.loc[repo, ku] = count
 
-        # 3. Μετατροπή των ακατέργαστων counts σε σταθμισμένα scores με TF-IDF
         tfidf_transformer = TfidfTransformer()
         tfidf_matrix = tfidf_transformer.fit_transform(df)
 
-        # 4. Εκτέλεση του K-Means πάνω στα σταθμισμένα δεδομένα
         kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init='auto')
         cluster_labels = kmeans.fit_predict(tfidf_matrix)
 
-        # 5. Μείωση διαστάσεων με PCA πάνω στα σταθμισμένα δεδομένα
         pca = PCA(n_components=2, random_state=42)
         coordinates_2d = pca.fit_transform(tfidf_matrix.toarray())
 
-        # 6. Σύνθεση της τελικής απάντησης
         results = []
         for repo_name, cluster_label, coords in zip(repo_names, cluster_labels, coordinates_2d):
             results.append({
@@ -990,14 +921,10 @@ def cluster_repositories_by_kus(num_clusters: int, organization=None):
         return None
 
 def get_entire_analysis_table():
-    """
-    Ανακτά ΟΛΕΣ τις εγγραφές και τις στήλες από τον πίνακα analysis_results.
-    """
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Απλό query για να πάρουμε όλα τα δεδομένα από τον πίνακα
         cur.execute('''
             SELECT id, repo_name, filename, author, timestamp, sha, detected_kus, elapsed_time
             FROM analysis_results
@@ -1006,19 +933,13 @@ def get_entire_analysis_table():
         rows = cur.fetchall()
         cur.close()
 
-        # Λίστα για την αποθήκευση των αποτελεσμάτων
         all_results = []
 
-        # Επεξεργασία κάθε γραμμής
         for row in rows:
-            # Αποσυμπίεση των πεδίων από τη γραμμή
             (id, repo_name, filename, author, timestamp, sha, detected_kus, elapsed_time) = row
 
-            # Το detected_kus είναι τύπου JSONB, οπότε η psycopg2 το μετατρέπει ήδη σε dict.
-            # Το timestamp είναι datetime object, το μετατρέπουμε σε string.
             timestamp_str = timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
 
-            # Προσθήκη του λεξικού στη λίστα
             all_results.append({
                 "id": id,
                 "repo_name": repo_name,
@@ -1026,7 +947,7 @@ def get_entire_analysis_table():
                 "author": author,
                 "timestamp": timestamp_str,
                 "sha": sha,
-                "detected_kus": detected_kus, # Είναι ήδη dict
+                "detected_kus": detected_kus,
                 "elapsed_time": elapsed_time
             })
 
@@ -1034,7 +955,7 @@ def get_entire_analysis_table():
 
     except Exception as e:
         print(f"An error occurred while fetching the entire analysis_results table: {e}")
-        return None  # Επιστρέφουμε None σε περίπτωση σφάλματος
+        return None
 
     finally:
         if 'conn' in locals() and conn is not None:
@@ -1042,13 +963,6 @@ def get_entire_analysis_table():
 
 
 def get_analysis_results(start_date_str=None, end_date_str=None, organization=None):
-    """
-    Ανακτά εγγραφές από τον πίνακα analysis_results με προαιρετικό φιλτράρισμα.
-    - Φιλτράρει με βάση την ημερομηνία έναρξης/λήξης.
-    - Φιλτράρει με βάση τον οργανισμό.
-    - Αν δεν δοθεί κανένα φίλτρο, επιστρέφει όλες τις εγγραφές.
-    Επιστρέφει επίσης το πεδίο 'organization' από τον πίνακα 'repositories'.
-    """
     try:
         base_query = '''
             SELECT
@@ -1084,7 +998,6 @@ def get_analysis_results(start_date_str=None, end_date_str=None, organization=No
             conditions.append("r.organization = %s")
             params.append(organization)
 
-        # Αν υπάρχει έστω και μία συνθήκη, τις προσθέτουμε στο query
         if conditions:
             base_query += " WHERE " + " AND ".join(conditions)
 
@@ -1093,7 +1006,6 @@ def get_analysis_results(start_date_str=None, end_date_str=None, organization=No
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Εκτελούμε το query με τις παραμέτρους για ασφάλεια (αποφυγή SQL Injection)
         cur.execute(base_query, tuple(params))
 
         rows = cur.fetchall()
@@ -1128,22 +1040,59 @@ def get_analysis_results(start_date_str=None, end_date_str=None, organization=No
             conn.close()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ΒΟΗΘΗΤΙΚΗ ΣΥΝΑΡΤΗΣΗ: Υπολογισμός πιθανότητας απώλειας με το 20% threshold
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _probability_of_loss(emps: int, p_individual_leave: float = 0.1, threshold_pct: float = 0.20) -> float:
+    """
+    Υπολογίζει την πιθανότητα να φύγει τουλάχιστον το `threshold_pct` (π.χ. 20%)
+    των employees που κατέχουν ένα KU.
+
+    Μοντελοποίηση:
+    - Κάθε employee φεύγει ανεξάρτητα με πιθανότητα `p_individual_leave`.
+    - X ~ Binomial(n=emps, p=p_individual_leave)
+    - Υπολογίζουμε P(X >= k), όπου k = ceil(threshold_pct * emps).
+    - Ειδική περίπτωση: αν emps == 0, δεν υπάρχει κίνδυνος → 0.0
+
+    Args:
+        emps: Αριθμός employees που κατέχουν το KU.
+        p_individual_leave: Πιθανότητα ένας employee να φύγει (default 10%).
+        threshold_pct: Το κατώφλι ως ποσοστό (default 20%).
+
+    Returns:
+        P(X >= ceil(threshold_pct * emps))
+    """
+    if emps == 0:
+        return 0.0
+
+    # Ελάχιστος αριθμός αναχωρήσεων που ορίζει «κίνδυνο»
+    k = max(1, math.ceil(threshold_pct * emps))
+
+    # P(X >= k) = 1 - P(X <= k-1)  [binomial survival function]
+    p_loss = 1.0 - binom.cdf(k - 1, n=emps, p=p_individual_leave)
+
+    return p_loss
+
+
 def calculate_risks(organization=None):
     """
     Calculates KU Risk and Employee Risk.
-    Can be filtered by a specific organization.
 
-    Args:
-        organization (str, optional): The name of the organization to filter by.
-                                      If None, calculates for all organizations.
+    Νέα λογική πιθανότητας απώλειας (p_L):
+    Αντί να απαιτείται να φύγουν *όλοι* οι employees που κατέχουν ένα KU,
+    θεωρούμε ότι αρκεί να φύγει το 20% από αυτούς.
+    Χρησιμοποιούμε Binomial Distribution:
+        p_L = P(X >= ceil(0.20 * emps))
+        όπου X ~ Bin(emps, p=0.10)
+
+    Can be filtered by a specific organization.
     """
     try:
         # --- Βήμα 1: Συλλογή και προετοιμασία δεδομένων ---
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Δυναμική κατασκευή των SQL queries
-        # Βασικό query που ενώνει τους δύο πίνακες
         base_query_select = '''
             SELECT ar.filename, ar.author, ar.detected_kus
             FROM analysis_results ar
@@ -1158,16 +1107,13 @@ def calculate_risks(organization=None):
         params = []
         where_clause = ""
 
-        # Αν έχει δοθεί οργανισμός, προσθέτουμε τη συνθήκη WHERE
         if organization:
             where_clause = " WHERE r.organization = %s"
             params.append(organization)
 
-        # Εκτέλεση του query για τα δεδομένα της ανάλυσης
         cur.execute(base_query_select + where_clause, tuple(params))
         analysis_data = cur.fetchall()
 
-        # Εκτέλεση του query για τον συνολικό αριθμό αρχείων
         cur.execute(base_query_count + where_clause, tuple(params))
         total_files_result = cur.fetchone()
         total_files = total_files_result[0] if total_files_result else 0
@@ -1176,7 +1122,6 @@ def calculate_risks(organization=None):
         conn.close()
 
         if not analysis_data or total_files == 0:
-            # Επιστρέφουμε κενά αποτελέσματα αντί για σφάλμα αν δεν βρεθούν δεδομένα
             return {
                 "ku_risk": {},
                 "employee_risk": {}
@@ -1194,24 +1139,32 @@ def calculate_risks(organization=None):
                     author_ku_map[author].add(ku)
 
         # --- Βήμα 3: Υπολογισμός KU Risk ---
-        P_A = 0.1
+        # ΑΛΛΑΓΗ: p_L = P(≥20% των employees φεύγουν) αντί P(όλοι φεύγουν)
         ku_risk_results = {}
 
         for ku, data in knowledge_units.items():
             emps = len(data['authors'])
             freq = data['freq']
-            p_L = P_A ** emps
+
+            # Νέος υπολογισμός πιθανότητας απώλειας
+            p_L = _probability_of_loss(emps)
+
             impact = freq / total_files
             ku_risk = p_L * impact
+
             ku_risk_results[ku] = {
                 "ku_risk": ku_risk,
                 "probability_of_loss": p_L,
                 "impact": impact,
                 "employee_count": emps,
-                "file_frequency": freq
+                "file_frequency": freq,
+                # Επιπλέον πληροφορία: πόσοι employees αρκεί να φύγουν
+                "employees_at_risk_threshold": max(1, math.ceil(0.20 * emps))
             }
 
         # --- Βήμα 4: Υπολογισμός Employee Risk ---
+        # ΑΛΛΑΓΗ: αντί να αφαιρούμε 1 employee, αφαιρούμε ceil(20% * emps_before).
+        # Αυτό μοντελοποιεί τον κίνδυνο αν φύγει ο employee ΜΑΖΙ με το 20% της ομάδας του.
         employee_risk_results = {}
 
         for author, kus in author_ku_map.items():
@@ -1223,17 +1176,26 @@ def calculate_risks(organization=None):
                 freq = ku_data['freq']
                 emps_before = len(ku_data['authors'])
                 impact = freq / total_files
-                p_L_before = P_A ** emps_before
+
+                # Risk πριν την αναχώρηση (με το νέο μοντέλο)
+                p_L_before = _probability_of_loss(emps_before)
                 risk_before = p_L_before * impact
-                emps_after = emps_before - 1
-                p_L_after = 1.0 if emps_after == 0 else P_A ** emps_after
+
+                # Risk μετά: αφαιρούμε ceil(20% * emps_before) employees
+                # (minimum 1, για να μην μένουμε με τον ίδιο αριθμό)
+                employees_leaving = max(1, math.ceil(0.20 * emps_before))
+                emps_after = max(0, emps_before - employees_leaving)
+
+                p_L_after = _probability_of_loss(emps_after)
                 risk_after = p_L_after * impact
+
                 delta_risk = risk_after - risk_before
                 total_delta_risk += delta_risk
                 total_before_risk += risk_before
 
             absolute_risk = total_delta_risk
             relative_risk = absolute_risk / total_before_risk if total_before_risk > 0 else 0.0
+
             employee_risk_results[author] = {
                 "absolute_employee_risk": absolute_risk,
                 "relative_employee_risk": relative_risk,
@@ -1250,16 +1212,8 @@ def calculate_risks(organization=None):
         return {"error": str(e)}
 
 def get_ku_counts_by_developer(developer_name, organization=None):
-    """
-    Για έναν συγκεκριμένο προγραμματιστή, επιστρέφει ένα λεξικό με όλα τα KUs
-    (K1 έως K27) και την τιμή τους να είναι το πλήθος των *μοναδικών αρχείων*
-    στα οποία εντοπίστηκε το καθένα. Τα KUs που δεν βρέθηκαν έχουν τιμή 0.
-    Αν δοθεί η παράμετρος organization, φιλτράρει μόνο τα repos αυτού του οργανισμού.
-    """
-    # 1. Δημιουργούμε το τελικό λεξικό με όλα τα KUs αρχικοποιημένα στο 0.
     all_kus = {f"K{i}": 0 for i in range(1, 28)}
 
-    # 2. Δυναμική κατασκευή του SQL query
     base_query = """
         SELECT
             ku.key AS ku_name,
@@ -1291,28 +1245,21 @@ def get_ku_counts_by_developer(developer_name, organization=None):
         rows = cur.fetchall()
         cur.close()
 
-        # 3. Ενημερώνουμε το αρχικό λεξικό με τα αποτελέσματα από τη βάση.
         for ku_name, file_count in rows:
             if ku_name in all_kus:
                 all_kus[ku_name] = 1
 
-        # 4. Επιστρέφουμε το πλήρες λεξικό.
         return all_kus
 
     except Exception as e:
         logging.error(f"An error occurred while getting KU counts for developer {developer_name}: {e}")
-        return None  # Επιστρέφουμε None σε περίπτωση σφάλματος
+        return None
     finally:
         if 'conn' in locals() and conn is not None:
             conn.close()
 
 
 def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None, organization=None):
-    """
-    Για όλους τους developers, επιστρέφει μια λίστα με τα repositories
-    στα οποία έχουν συνεισφέρει, φιλτραρισμένη προαιρετικά από ένα χρονικό εύρος
-    και/ή έναν οργανισμό.
-    """
     base_query = """
         SELECT
             ar.author,
@@ -1329,7 +1276,6 @@ def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None, organiz
     conditions = ["ku.value = '1'"]
     params = []
 
-    # Προσθήκη συνθήκης για την αρχική ημερομηνία
     if start_date_str:
         try:
             start_date = datetime.strptime(start_date_str, '%Y-%m')
@@ -1339,7 +1285,6 @@ def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None, organiz
             logging.warning(f"Invalid start_date format provided: {start_date_str}")
             pass
 
-    # Προσθήκη συνθήκης για την τελική ημερομηνία
     if end_date_str:
         try:
             end_date_exclusive = datetime.strptime(end_date_str, '%Y-%m') + relativedelta(months=1)
@@ -1349,12 +1294,10 @@ def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None, organiz
             logging.warning(f"Invalid end_date format provided: {end_date_str}")
             pass
 
-    # Προσθήκη συνθήκης για τον οργανισμό
     if organization:
         conditions.append("r.organization = %s")
         params.append(organization)
 
-    # Σύνθεση του τελικού query
     if conditions:
         base_query += " WHERE " + " AND ".join(conditions)
 
@@ -1401,11 +1344,6 @@ def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None, organiz
             conn.close()
 
 def get_ku_skills_by_organization(organization_name):
-    """
-    Για έναν συγκεκριμένο οργανισμό, επιστρέφει για κάθε KU το πλήθος των
-    μοναδικών αρχείων στα οποία εντοπίστηκε και το πλήθος των μοναδικών
-    authors που συνεισέφεραν σε αυτά τα αρχεία.
-    """
     sql_query = """
         SELECT
             ku.key AS ku_name,
@@ -1431,7 +1369,6 @@ def get_ku_skills_by_organization(organization_name):
         rows = cur.fetchall()
         cur.close()
 
-        # Μετατροπή των αποτελεσμάτων σε μια λίστα από λεξικά
         skills_data = [
             {"ku_name": row[0], "total_files": int(row[1]), "total_authors": int(row[2])}
             for row in rows
