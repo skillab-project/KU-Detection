@@ -85,9 +85,6 @@ pipeline {
         // *** Push Images In Docker Hub ***
         // ********************************
         stage("Push_Image_Docker_Hub"){
-            when {
-                environment name: "GIT_BRANCH", value: "origin/main"
-            }
             steps {
                 withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: "${DOCKER_HUB_CREDS}", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]){
                     echo "***** Push Docker Image to Docker Hub *****"
