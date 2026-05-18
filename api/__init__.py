@@ -1,7 +1,7 @@
 from flask import Flask
 from flask_cors import CORS
 from api.routes import init_routes
-from api.data_db import create_tables
+from api.data_db import create_tables, initialize_database
 import subprocess
 import logging
 
@@ -11,7 +11,7 @@ def create_app():
     init_routes(app)
 
     create_tables()
-    
+    initialize_database()
     enable_git_longpaths()
 
     return app

@@ -128,49 +128,98 @@ def create_tables():
         if conn is not None:
             conn.close()
 
+def execute_sql_script(cursor, script_path):
+    """
+    Εκτελεί ένα SQL script που περιέχει πολλαπλές εντολές.
+    Κάθε εντολή αναμένεται να τερματίζεται με ερωτηματικό (;).
+    """
+    with open(script_path, 'r', encoding='utf-8') as f:
+        sql_commands = f.read().split(';')
+        for command in sql_commands:
+            command = command.strip()
+            if command: # Εκτελεί μόνο μη κενές εντολές
+                try:
+                    cursor.execute(command)
+                except psycopg2.Error as e:
+                    logging.error(f"Σφάλμα κατά την εκτέλεση SQL εντολής: {command[:100]}...")
+                    logging.exception(e)
+                    raise # Επανεμφάνιση σφάλματος για να αποτύχει η συναλλαγή
 
 def initialize_database():
     conn = None
     cur = None
-    sql_file_path = ""
+    seed_file = "/tmp/seed_data.sql" # Ορισμός της διαδρομής του προσωρινού αρχείου
 
     try:
-        conn = get_db_connection()
+        conn = get_db_connection() # Υποθέτει ότι αυτή η συνάρτηση υπάρχει και λειτουργεί
         cur = conn.cursor()
 
-        cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'repositories');")
-        tables_exist = cur.fetchone()[0]
+        # Έλεγχος αν η βάση δεδομένων είναι ήδη γεμάτη
+        cur.execute("SELECT COUNT(*) FROM repositories;")
+        count = cur.fetchone()[0]
 
-        if tables_exist:
-            cur.execute("SELECT COUNT(*) FROM repositories;")
-            count = cur.fetchone()[0]
-            if count > 0:
-                logging.info("Database already exists and is populated. Skipping initialization.")
-                return
+        if count > 0:
+            logging.info(f"Η βάση δεδομένων έχει ήδη δεδομένα ({count} repos βρέθηκαν). Παραλείπεται η αρχικοποίηση.")
+            return
 
-        cur.close()
-        conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+        logging.info("Η βάση δεδομένων είναι άδεια. Πραγματοποιείται λήψη δεδομένων seed από το Hugging Face...")
 
-        logging.info("Database is empty. Executing full setup script from 'init_data.sql'...")
-        sql_file_path = os.path.join(os.path.dirname(__file__), '..', 'db', 'init_data.sql')
+        seed_url = "https://huggingface.co/datasets/nnikolaidis/skillab-ku-analysis-2/resolve/main/seed_data.sql"
+        urllib.request.urlretrieve(seed_url, seed_file)
+        logging.info(f"Το αρχείο seed κατέβηκε επιτυχώς στο {seed_file}. Φορτώνεται στη βάση δεδομένων...")
 
-        with open(sql_file_path, 'r', encoding='utf-8') as f:
-            sql_script_content = f.read()
+        # Φόρτωση δεδομένων seed και καθαρισμός εντός μιας συναλλαγής
+        # Η conn.set_isolation_level δεν χρειάζεται εδώ, καθώς η commit/rollback είναι ρητή
+        
+        execute_sql_script(cur, seed_file)
+        logging.info("Τα δεδομένα seed φορτώθηκαν επιτυχώς.")
 
-        cur = conn.cursor()
-        cur.execute(sql_script_content)
+        # Αφαίρεση apache repositories
+        logging.info("Αφαιρούνται τα 'apache' repositories...")
+        cur.execute("""
+            DELETE FROM analysis_results
+            WHERE repo_name IN (SELECT name FROM repositories WHERE organization = 'apache');
+        """)
+        cur.execute("""
+            DELETE FROM commits
+            WHERE repo_name IN (SELECT name FROM repositories WHERE organization = 'apache');
+        """)
+        cur.execute("DELETE FROM repositories WHERE organization = 'apache';")
+        logging.info("Τα Apache repositories αφαιρέθηκαν.")
 
-        logging.info("Database initialization complete.")
+        # Οριστική αποθήκευση όλων των αλλαγών
+        conn.commit()
+        logging.info("Η αρχικοποίηση και ο καθαρισμός της βάσης δεδομένων ολοκληρώθηκαν με commit.")
 
+        # Επαλήθευση (προαιρετικό)
+        cur.execute("SELECT organization, COUNT(*) FROM repositories GROUP BY organization;")
+        rows = cur.fetchall()
+        for row in rows:
+            logging.info(f"  Οργανισμός: {row[0]}, Repositories: {row[1]}")
+
+        # Καθαρισμός του προσωρινού αρχείου seed
+        if os.path.exists(seed_file):
+            os.remove(seed_file)
+            logging.info(f"Αφαιρέθηκε το προσωρινό αρχείο seed: {seed_file}")
+
+    except urllib.error.URLError as e:
+        logging.critical(f"Αποτυχία λήψης δεδομένων seed από {seed_url}: {e.reason}")
+        raise # Επανεμφάνιση σφάλματος για να σταματήσει η εφαρμογή αν η λήψη είναι κρίσιμη
     except FileNotFoundError:
-        logging.critical(f"The setup file was not found: {sql_file_path}")
-
+        logging.critical(f"Το προσωρινό αρχείο seed δεν βρέθηκε μετά την προσπάθεια λήψης: {seed_file}")
+        raise
     except psycopg2.Error as e:
-        logging.exception(f"PostgreSQL error: {e.pgerror}")
-
+        logging.exception(f"Σφάλμα PostgreSQL κατά την αρχικοποίηση της βάσης δεδομένων: {e.pgerror}")
+        if conn:
+            conn.rollback() # Αναίρεση της συναλλαγής σε περίπτωση σφάλματος βάσης δεδομένων
+            logging.warning("Η συναλλαγή της βάσης δεδομένων αναιρέθηκε λόγω σφάλματος.")
+        raise
     except Exception as e:
-        logging.exception("Unexpected error during database initialization:")
-
+        logging.exception("Μη αναμενόμενο σφάλμα κατά την αρχικοποίηση της βάσης δεδομένων:")
+        if conn:
+            conn.rollback() # Αναίρεση για οποιοδήποτε άλλο σφάλμα
+            logging.warning("Η συναλλαγή της βάσης δεδομένων αναιρέθηκε λόγω μη αναμενόμενου σφάλματος.")
+        raise
     finally:
         if cur is not None:
             cur.close()
