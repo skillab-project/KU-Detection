@@ -130,54 +130,70 @@ def create_tables():
     finally:
         if conn is not None:
             conn.close()
-
-def execute_sql_script(cursor, script_path):
-    """
-    Εκτελεί ένα SQL script που περιέχει πολλαπλές εντολές.
-    Κάθε εντολή αναμένεται να τερματίζεται με ερωτηματικό (;).
-    """
-    with open(script_path, 'r', encoding='utf-8') as f:
-        sql_commands = f.read().split(';')
-        for command in sql_commands:
-            command = command.strip()
-            if command: # Εκτελεί μόνο μη κενές εντολές
-                try:
-                    cursor.execute(command)
-                except psycopg2.Error as e:
-                    logging.error(f"Σφάλμα κατά την εκτέλεση SQL εντολής: {command[:100]}...")
-                    logging.exception(e)
-                    raise # Επανεμφάνιση σφάλματος για να αποτύχει η συναλλαγή
-
 def initialize_database():
+    """
+    Αρχικοποιεί τη βάση με seed data αν είναι άδεια.
+    Χρησιμοποιεί το psql command για να εκτελέσει το SQL dump αξιόπιστα.
+    """
     conn = None
     cur = None
-    seed_file = "/tmp/seed_data.sql" # Ορισμός της διαδρομής του προσωρινού αρχείου
+    seed_file = "/tmp/seed_data.sql"
 
     try:
-        conn = get_db_connection() # Υποθέτει ότι αυτή η συνάρτηση υπάρχει και λειτουργεί
+        conn = get_db_connection()
         cur = conn.cursor()
 
-        # Έλεγχος αν η βάση δεδομένων είναι ήδη γεμάτη
+        # Έλεγχος αν η βάση είναι ήδη γεμάτη
         cur.execute("SELECT COUNT(*) FROM repositories;")
         count = cur.fetchone()[0]
 
         if count > 0:
-            logging.info(f"Η βάση δεδομένων έχει ήδη δεδομένα ({count} repos βρέθηκαν). Παραλείπεται η αρχικοποίηση.")
+            logging.info(f"Η βάση δεδομένων έχει ήδη δεδομένα ({count} repos). Παραλείπεται η αρχικοποίηση.")
             return
 
-        logging.info("Η βάση δεδομένων είναι άδεια. Πραγματοποιείται λήψη δεδομένων seed από το Hugging Face...")
+        cur.close()
+        conn.close()
+        cur = None
+        conn = None
 
+        logging.info("Η βάση δεδομένων είναι άδεια. Λήψη δεδομένων seed από το Hugging Face...")
+
+        # Download seed file
         seed_url = "https://huggingface.co/datasets/nnikolaidis/skillab-ku-analysis-2/resolve/main/seed_data.sql"
         urllib.request.urlretrieve(seed_url, seed_file)
-        logging.info(f"Το αρχείο seed κατέβηκε επιτυχώς στο {seed_file}. Φορτώνεται στη βάση δεδομένων...")
+        logging.info(f"Το αρχείο seed κατέβηκε στο {seed_file}.")
 
-        # Φόρτωση δεδομένων seed και καθαρισμός εντός μιας συναλλαγής
-        # Η conn.set_isolation_level δεν χρειάζεται εδώ, καθώς η commit/rollback είναι ρητή
-        
-        execute_sql_script(cur, seed_file)
-        logging.info("Τα δεδομένα seed φορτώθηκαν επιτυχώς.")
+        # Εκτέλεση του SQL dump μέσω psql (αξιόπιστο για COPY/JSONB/dollar-quoted)
+        logging.info("Φόρτωση δεδομένων στη βάση μέσω psql...")
+        env = os.environ.copy()
+        env["PGPASSWORD"] = DB_PASSWORD
 
-        # Αφαίρεση apache repositories
+        result = subprocess.run(
+            [
+                "psql",
+                "-h", DB_HOST,
+                "-p", str(DB_PORT),
+                "-U", DB_USER,
+                "-d", DB_NAME,
+                "-f", seed_file,
+                "-v", "ON_ERROR_STOP=0",  # συνέχισε ακόμα κι αν υπάρχουν duplicate keys
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=1800,  # 30 λεπτά timeout για 1.17GB
+        )
+
+        if result.returncode != 0:
+            logging.warning(f"Το psql επέστρεψε κωδικό {result.returncode}")
+            logging.warning(f"stderr (last 2000 chars): {result.stderr[-2000:]}")
+        else:
+            logging.info("Τα δεδομένα seed φορτώθηκαν επιτυχώς.")
+
+        # Νέα σύνδεση για το cleanup (apache repos)
+        conn = get_db_connection()
+        cur = conn.cursor()
+
         logging.info("Αφαιρούνται τα 'apache' repositories...")
         cur.execute("""
             DELETE FROM analysis_results
@@ -188,40 +204,38 @@ def initialize_database():
             WHERE repo_name IN (SELECT name FROM repositories WHERE organization = 'apache');
         """)
         cur.execute("DELETE FROM repositories WHERE organization = 'apache';")
+
+        conn.commit()
         logging.info("Τα Apache repositories αφαιρέθηκαν.")
 
-        # Οριστική αποθήκευση όλων των αλλαγών
-        conn.commit()
-        logging.info("Η αρχικοποίηση και ο καθαρισμός της βάσης δεδομένων ολοκληρώθηκαν με commit.")
-
-        # Επαλήθευση (προαιρετικό)
+        # Επαλήθευση
         cur.execute("SELECT organization, COUNT(*) FROM repositories GROUP BY organization;")
-        rows = cur.fetchall()
-        for row in rows:
-            logging.info(f"  Οργανισμός: {row[0]}, Repositories: {row[1]}")
+        for org, cnt in cur.fetchall():
+            logging.info(f"  Οργανισμός: {org}, Repositories: {cnt}")
 
-        # Καθαρισμός του προσωρινού αρχείου seed
+        # Καθαρισμός
         if os.path.exists(seed_file):
             os.remove(seed_file)
-            logging.info(f"Αφαιρέθηκε το προσωρινό αρχείο seed: {seed_file}")
+            logging.info(f"Αφαιρέθηκε το προσωρινό αρχείο: {seed_file}")
 
     except urllib.error.URLError as e:
-        logging.critical(f"Αποτυχία λήψης δεδομένων seed από {seed_url}: {e.reason}")
-        raise # Επανεμφάνιση σφάλματος για να σταματήσει η εφαρμογή αν η λήψη είναι κρίσιμη
-    except FileNotFoundError:
-        logging.critical(f"Το προσωρινό αρχείο seed δεν βρέθηκε μετά την προσπάθεια λήψης: {seed_file}")
+        logging.critical(f"Αποτυχία λήψης seed: {e.reason}")
+        raise
+    except subprocess.TimeoutExpired:
+        logging.critical("Timeout κατά την εκτέλεση του psql (>30 λεπτά).")
+        raise
+    except FileNotFoundError as e:
+        logging.critical(f"Δεν βρέθηκε εκτελέσιμο/αρχείο: {e}. Είναι εγκατεστημένο το psql στο container;")
         raise
     except psycopg2.Error as e:
-        logging.exception(f"Σφάλμα PostgreSQL κατά την αρχικοποίηση της βάσης δεδομένων: {e.pgerror}")
+        logging.exception(f"Σφάλμα PostgreSQL: {e}")
         if conn:
-            conn.rollback() # Αναίρεση της συναλλαγής σε περίπτωση σφάλματος βάσης δεδομένων
-            logging.warning("Η συναλλαγή της βάσης δεδομένων αναιρέθηκε λόγω σφάλματος.")
+            conn.rollback()
         raise
     except Exception as e:
-        logging.exception("Μη αναμενόμενο σφάλμα κατά την αρχικοποίηση της βάσης δεδομένων:")
+        logging.exception("Μη αναμενόμενο σφάλμα κατά την αρχικοποίηση:")
         if conn:
-            conn.rollback() # Αναίρεση για οποιοδήποτε άλλο σφάλμα
-            logging.warning("Η συναλλαγή της βάσης δεδομένων αναιρέθηκε λόγω μη αναμενόμενου σφάλματος.")
+            conn.rollback()
         raise
     finally:
         if cur is not None:
