@@ -128,48 +128,66 @@ def create_tables():
         if conn is not None:
             conn.close()
 
-
 def initialize_database():
     conn = None
     cur = None
-    sql_file_path = ""
 
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'repositories');")
-        tables_exist = cur.fetchone()[0]
+        # Έλεγχος αν υπάρχουν ήδη δεδομένα
+        cur.execute("SELECT COUNT(*) FROM repositories;")
+        count = cur.fetchone()[0]
 
-        if tables_exist:
-            cur.execute("SELECT COUNT(*) FROM repositories;")
-            count = cur.fetchone()[0]
-            if count > 0:
-                logging.info("Database already exists and is populated. Skipping initialization.")
-                return
+        if count > 0:
+            logging.info(f"Database already seeded ({count} repos found). Skipping.")
+            return
 
         cur.close()
+        conn.close()
+
+        logging.info("Database is empty. Downloading seed data from Hugging Face...")
+
+        import urllib.request
+        seed_url = "https://huggingface.co/datasets/nnikolaidis/skillab-ku-analysis-2/resolve/main/seed_data.sql"
+        seed_file = "/tmp/seed_data.sql"
+        urllib.request.urlretrieve(seed_url, seed_file)
+
+        logging.info(f"Downloaded seed file. Loading into database...")
+
+        conn = get_db_connection()
         conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-
-        logging.info("Database is empty. Executing full setup script from 'init_data.sql'...")
-        sql_file_path = os.path.join(os.path.dirname(__file__), '..', 'db', 'init_data.sql')
-
-        with open(sql_file_path, 'r', encoding='utf-8') as f:
-            sql_script_content = f.read()
-
         cur = conn.cursor()
-        cur.execute(sql_script_content)
 
-        logging.info("Database initialization complete.")
+        with open(seed_file, 'r', encoding='utf-8') as f:
+            sql_script = f.read()
 
-    except FileNotFoundError:
-        logging.critical(f"The setup file was not found: {sql_file_path}")
+        cur.execute(sql_script)
+        logging.info("Seed data loaded successfully.")
 
-    except psycopg2.Error as e:
-        logging.exception(f"PostgreSQL error: {e.pgerror}")
+        # Διαγραφή apache
+        logging.info("Removing apache repositories...")
+        cur.execute("""
+            DELETE FROM analysis_results 
+            WHERE repo_name IN (SELECT name FROM repositories WHERE organization = 'apache');
+        """)
+        cur.execute("""
+            DELETE FROM commits 
+            WHERE repo_name IN (SELECT name FROM repositories WHERE organization = 'apache');
+        """)
+        cur.execute("DELETE FROM repositories WHERE organization = 'apache';")
+
+        logging.info("Apache repositories removed.")
+
+        # Επαλήθευση
+        cur.execute("SELECT organization, COUNT(*) FROM repositories GROUP BY organization;")
+        rows = cur.fetchall()
+        for row in rows:
+            logging.info(f"  {row[0]}: {row[1]} repos")
 
     except Exception as e:
-        logging.exception("Unexpected error during database initialization:")
+        logging.exception(f"Error during database initialization: {e}")
 
     finally:
         if cur is not None:
