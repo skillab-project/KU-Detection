@@ -6,7 +6,8 @@ services:
       context: .
     container_name: ku-detection-backend
     depends_on:
-      - ku-detection-db
+      ku-detection-db:
+        condition: service_healthy
     environment:
       - DB_HOST=ku-detection-db
       - DB_PORT=5432
@@ -31,15 +32,59 @@ services:
     volumes:
       - ku_detection_postgresql:/var/lib/postgresql
       - ku_detection_postgresql_data:/var/lib/postgresql/data
-      - ./db-init:/docker-entrypoint-initdb.d
     restart: unless-stopped
     ports:
       - '5430:5432'
     networks:
       - shared-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     labels:
       io.portainer.accesscontrol.teams: skillab-all
 
+  ku-detection-seeder:
+    image: postgres:16.2
+    container_name: ku-detection-seeder
+    depends_on:
+      ku-detection-db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: root
+    command: >
+      bash -c "
+        echo 'Checking if seeding needed...'
+        COUNT=$$(psql -h ku-detection-db -U root -d test -tAc 'SELECT COUNT(*) FROM repositories 2>/dev/null || echo 0')
+        if [ \"$$COUNT\" = \"0\" ]; then
+          echo 'Installing curl...'
+          apt-get update -qq && apt-get install -y -qq curl
+          echo '⬇Downloading seed data...'
+          curl -L -o /tmp/seed_data.sql \
+            https://huggingface.co/datasets/nnikolaidis/skillab-ku-analysis-2/resolve/main/seed_data.sql
+          echo 'Loading data into database...'
+          psql -h ku-detection-db -U root -d test -v ON_ERROR_STOP=0 -f /tmp/seed_data.sql
+          echo 'Removing apache repositories...'
+          psql -h ku-detection-db -U root -d test <<-SQL
+            BEGIN;
+            DELETE FROM analysis_results WHERE repo_name IN (SELECT name FROM repositories WHERE organization = 'apache');
+            DELETE FROM commits WHERE repo_name IN (SELECT name FROM repositories WHERE organization = 'apache');
+            DELETE FROM repositories WHERE organization = 'apache';
+            COMMIT;
+        SQL
+          echo '✅ Seeding complete!'
+          psql -h ku-detection-db -U root -d test -c \
+            'SELECT organization, COUNT(*) FROM repositories GROUP BY organization;'
+        else
+          echo \"✅ DB already seeded ($$COUNT repos found), skipping.\"
+        fi
+      "
+    restart: "no"
+    networks:
+      - shared-net
+    labels:
+      io.portainer.accesscontrol.teams: skillab-all
 
 volumes:
   ku_detection_postgresql:
