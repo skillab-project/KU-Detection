@@ -31,6 +31,7 @@ services:
     volumes:
       - ku_detection_postgresql:/var/lib/postgresql
       - ku_detection_postgresql_data:/var/lib/postgresql/data
+      - ./db-init:/docker-entrypoint-initdb.d
     restart: unless-stopped
     ports:
       - '5430:5432'
@@ -51,4 +52,3 @@ volumes:
 networks:
   shared-net:
     external: true
-
