@@ -11,6 +11,9 @@ from collections import defaultdict
 from dateutil.relativedelta import relativedelta
 import subprocess
 import math
+import urllib.request
+import urllib.error 
+
 from scipy.stats import binom  # <-- ΝΕΟ import
 
 # --- Βιβλιοθήκες για ML και Ανάλυση ---
