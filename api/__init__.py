@@ -11,7 +11,7 @@ def create_app():
     init_routes(app)
 
     create_tables()
-    initialize_database() 
+    
     enable_git_longpaths()
 
     return app
