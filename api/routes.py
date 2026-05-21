@@ -320,24 +320,28 @@ def init_routes(app):
             logging.exception(f"Error in /organizationskills endpoint")
             return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
+
     @app.route("/ku_risk", methods=["GET"])
     def get_ku_risk_endpoint():
         """
         Calculates and returns the risk associated with each Knowledge Unit (KU).
-        The risk is a product of the probability of loss and the impact of that loss.
-        Filtered by the organization in X-User-Organization header.
+        
+        Query Parameters (optional):
+        - repo_name: Φιλτράρει τα αποτελέσματα για συγκεκριμένο repository.
+                    Αν δεν δοθεί, επιστρέφει για όλο τον οργανισμό.
         """
         organization = request.headers.get('X-User-Organization')
         if not organization:
             return jsonify({"error": "X-User-Organization header is required"}), 400
 
+        repo_name = request.args.get('repo_name')  # None αν δεν δοθεί
+
         try:
-            risk_data = calculate_risks(organization=organization)
+            risk_data = calculate_risks(organization=organization, repo_name=repo_name)
 
             if "error" in risk_data:
                 return jsonify(risk_data), 500
 
-            # Μετατροπή σε λίστα για ευκολότερη διαχείριση στο frontend
             ku_risk_list = [
                 {"ku_name": ku, **data} for ku, data in risk_data.get("ku_risk", {}).items()
             ]
@@ -348,24 +352,29 @@ def init_routes(app):
             logging.exception("Error in /ku_risk endpoint")
             return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
+
     @app.route("/employee_risk", methods=["GET"])
     def get_employee_risk_endpoint():
         """
         Calculates and returns the risk associated with the hypothetical departure
-        of each employee, in both absolute and relative terms.
-        Filtered by the organization in X-User-Organization header.
+        of each employee.
+
+        Query Parameters (optional):
+        - repo_name: Φιλτράρει τα αποτελέσματα για συγκεκριμένο repository.
+                    Αν δεν δοθεί, επιστρέφει για όλο τον οργανισμό.
         """
         organization = request.headers.get('X-User-Organization')
         if not organization:
             return jsonify({"error": "X-User-Organization header is required"}), 400
 
+        repo_name = request.args.get('repo_name')  # None αν δεν δοθεί
+
         try:
-            risk_data = calculate_risks(organization=organization)
+            risk_data = calculate_risks(organization=organization, repo_name=repo_name)
 
             if "error" in risk_data:
                 return jsonify(risk_data), 500
 
-            # Μετατροπή σε λίστα για ευκολότερη διαχείριση στο frontend
             employee_risk_list = [
                 {"employee_name": employee, **data} for employee, data in risk_data.get("employee_risk", {}).items()
             ]

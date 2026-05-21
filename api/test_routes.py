@@ -769,16 +769,11 @@ class FlaskAPITests(unittest.TestCase):
     # ------------------------------------------------------------------
     @patch('api.routes.calculate_risks')
     def test_get_ku_risk(self, mock_calculate_risks):
-        """
-        Title: Testing KU risk endpoint
-        Description: Verifies the /ku_risk endpoint calculates and returns KU risk data.
-        Tests missing header, successful retrieval, error in risk data, and exception handling.
-        """
         # Σενάριο 0: Λείπει το header -> 400
         response = self.client.get('/ku_risk')
         self.assertEqual(response.status_code, 400)
 
-        # Σενάριο 1: Επιτυχής ανάκτηση
+        # Σενάριο 1: Χωρίς repo_name -> για όλο τον οργανισμό
         mock_calculate_risks.return_value = {
             "ku_risk": {"KU_1": {"risk": 0.8}, "KU_2": {"risk": 0.5}},
             "employee_risk": {}
@@ -789,34 +784,42 @@ class FlaskAPITests(unittest.TestCase):
         self.assertEqual(len(data), 2)
         ku_names = [item["ku_name"] for item in data]
         self.assertIn("KU_1", ku_names)
-        mock_calculate_risks.assert_called_once_with(organization="test_org")
+        mock_calculate_risks.assert_called_once_with(organization="test_org", repo_name=None)  # ΝΕΟ
 
-        # Σενάριο 2: Επιστροφή σφάλματος μέσα στα δεδομένα -> 500
+        # Σενάριο 2: Με repo_name -> φιλτράρισμα ανά repo  ΝΕΟ ΣΕΝΑΡΙΟ
+        mock_calculate_risks.reset_mock()
+        mock_calculate_risks.return_value = {
+            "ku_risk": {"KU_1": {"risk": 0.3}},
+            "employee_risk": {}
+        }
+        response = self.client.get('/ku_risk?repo_name=my-repo', headers=ORG_HEADER)
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertEqual(len(data), 1)
+        mock_calculate_risks.assert_called_once_with(organization="test_org", repo_name="my-repo")  # ΝΕΟ
+
+        # Σενάριο 3: Επιστροφή σφάλματος μέσα στα δεδομένα -> 500
         mock_calculate_risks.return_value = {"error": "Insufficient data"}
         response = self.client.get('/ku_risk', headers=ORG_HEADER)
         self.assertEqual(response.status_code, 500)
 
-        # Σενάριο 3: Exception -> 500
+        # Σενάριο 4: Exception -> 500
         mock_calculate_risks.side_effect = Exception("Risk error")
         response = self.client.get('/ku_risk', headers=ORG_HEADER)
         self.assertEqual(response.status_code, 500)
         mock_calculate_risks.side_effect = None
+
 
     # ------------------------------------------------------------------
     # /employee_risk
     # ------------------------------------------------------------------
     @patch('api.routes.calculate_risks')
     def test_get_employee_risk(self, mock_calculate_risks):
-        """
-        Title: Testing employee risk endpoint
-        Description: Verifies the /employee_risk endpoint returns per-employee risk data.
-        Tests missing header, successful retrieval, error in risk data, and exception handling.
-        """
         # Σενάριο 0: Λείπει το header -> 400
         response = self.client.get('/employee_risk')
         self.assertEqual(response.status_code, 400)
 
-        # Σενάριο 1: Επιτυχής ανάκτηση
+        # Σενάριο 1: Χωρίς repo_name -> για όλο τον οργανισμό
         mock_calculate_risks.return_value = {
             "ku_risk": {},
             "employee_risk": {
@@ -830,13 +833,26 @@ class FlaskAPITests(unittest.TestCase):
         self.assertEqual(len(data), 2)
         employee_names = [item["employee_name"] for item in data]
         self.assertIn("alice", employee_names)
+        mock_calculate_risks.assert_called_once_with(organization="test_org", repo_name=None)  # ΝΕΟ
 
-        # Σενάριο 2: Επιστροφή σφάλματος μέσα στα δεδομένα -> 500
+        # Σενάριο 2: Με repo_name -> φιλτράρισμα ανά repo  ΝΕΟ ΣΕΝΑΡΙΟ
+        mock_calculate_risks.reset_mock()
+        mock_calculate_risks.return_value = {
+            "ku_risk": {},
+            "employee_risk": {"alice": {"absolute_risk": 0.7}}
+        }
+        response = self.client.get('/employee_risk?repo_name=my-repo', headers=ORG_HEADER)
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertEqual(len(data), 1)
+        mock_calculate_risks.assert_called_once_with(organization="test_org", repo_name="my-repo")  # ΝΕΟ
+
+        # Σενάριο 3: Επιστροφή σφάλματος μέσα στα δεδομένα -> 500
         mock_calculate_risks.return_value = {"error": "Insufficient data"}
         response = self.client.get('/employee_risk', headers=ORG_HEADER)
         self.assertEqual(response.status_code, 500)
 
-        # Σενάριο 3: Exception -> 500
+        # Σενάριο 4: Exception -> 500
         mock_calculate_risks.side_effect = Exception("Risk error")
         response = self.client.get('/employee_risk', headers=ORG_HEADER)
         self.assertEqual(response.status_code, 500)

@@ -1140,22 +1140,19 @@ def _probability_of_loss(emps: int, p_individual_leave: float = 0.1, threshold_p
 
     return p_loss
 
-
-def calculate_risks(organization=None):
+def calculate_risks(organization=None, repo_name=None):
     """
     Calculates KU Risk and Employee Risk.
+    Μπορεί να φιλτραριστεί από organization και/ή repo_name.
 
-    Νέα λογική πιθανότητας απώλειας (p_L):
+    Λογική πιθανότητας απώλειας (p_L):
     Αντί να απαιτείται να φύγουν *όλοι* οι employees που κατέχουν ένα KU,
     θεωρούμε ότι αρκεί να φύγει το 20% από αυτούς.
     Χρησιμοποιούμε Binomial Distribution:
         p_L = P(X >= ceil(0.20 * emps))
         όπου X ~ Bin(emps, p=0.10)
-
-    Can be filtered by a specific organization.
     """
     try:
-        # --- Βήμα 1: Συλλογή και προετοιμασία δεδομένων ---
         conn = get_db_connection()
         cur = conn.cursor()
 
@@ -1170,12 +1167,20 @@ def calculate_risks(organization=None):
             JOIN repositories r ON ar.repo_name = r.name
         '''
 
+        conditions = []
         params = []
-        where_clause = ""
 
         if organization:
-            where_clause = " WHERE r.organization = %s"
+            conditions.append("r.organization = %s")
             params.append(organization)
+
+        if repo_name:
+            conditions.append("ar.repo_name = %s")
+            params.append(repo_name)
+
+        where_clause = ""
+        if conditions:
+            where_clause = " WHERE " + " AND ".join(conditions)
 
         cur.execute(base_query_select + where_clause, tuple(params))
         analysis_data = cur.fetchall()
@@ -1193,7 +1198,7 @@ def calculate_risks(organization=None):
                 "employee_risk": {}
             }
 
-        # --- Βήμα 2: Δόμηση πληροφορίας (Aggregation) ---
+        # --- Βήμα 2: Aggregation ---
         knowledge_units = defaultdict(lambda: {'freq': 0, 'authors': set()})
         author_ku_map = defaultdict(set)
 
@@ -1204,17 +1209,14 @@ def calculate_risks(organization=None):
                     knowledge_units[ku]['authors'].add(author)
                     author_ku_map[author].add(ku)
 
-        # --- Βήμα 3: Υπολογισμός KU Risk ---
-        # ΑΛΛΑΓΗ: p_L = P(≥20% των employees φεύγουν) αντί P(όλοι φεύγουν)
+        # --- Βήμα 3: KU Risk ---
         ku_risk_results = {}
 
         for ku, data in knowledge_units.items():
             emps = len(data['authors'])
             freq = data['freq']
 
-            # Νέος υπολογισμός πιθανότητας απώλειας
             p_L = _probability_of_loss(emps)
-
             impact = freq / total_files
             ku_risk = p_L * impact
 
@@ -1224,13 +1226,10 @@ def calculate_risks(organization=None):
                 "impact": impact,
                 "employee_count": emps,
                 "file_frequency": freq,
-                # Επιπλέον πληροφορία: πόσοι employees αρκεί να φύγουν
                 "employees_at_risk_threshold": max(1, math.ceil(0.20 * emps))
             }
 
-        # --- Βήμα 4: Υπολογισμός Employee Risk ---
-        # ΑΛΛΑΓΗ: αντί να αφαιρούμε 1 employee, αφαιρούμε ceil(20% * emps_before).
-        # Αυτό μοντελοποιεί τον κίνδυνο αν φύγει ο employee ΜΑΖΙ με το 20% της ομάδας του.
+        # --- Βήμα 4: Employee Risk ---
         employee_risk_results = {}
 
         for author, kus in author_ku_map.items():
@@ -1243,12 +1242,9 @@ def calculate_risks(organization=None):
                 emps_before = len(ku_data['authors'])
                 impact = freq / total_files
 
-                # Risk πριν την αναχώρηση (με το νέο μοντέλο)
                 p_L_before = _probability_of_loss(emps_before)
                 risk_before = p_L_before * impact
 
-                # Risk μετά: αφαιρούμε ceil(20% * emps_before) employees
-                # (minimum 1, για να μην μένουμε με τον ίδιο αριθμό)
                 employees_leaving = max(1, math.ceil(0.20 * emps_before))
                 emps_after = max(0, emps_before - employees_leaving)
 
