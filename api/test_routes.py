@@ -62,6 +62,7 @@ class FlaskAPITests(unittest.TestCase):
         self.assertIn("error", data)
 
         # Σενάριο 1: Το repo ΔΕΝ υπάρχει -> clone
+        print("test")
         mock_repo_exists.return_value = False
         mock_extract.return_value = self.sample_commits
         mock_save_commits.return_value = None
