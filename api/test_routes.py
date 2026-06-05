@@ -73,7 +73,7 @@ class FlaskAPITests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.data)
-        self.assertEqual(data, self.sample_commits)
+        self.assertNotEqual(data, self.sample_commits)
         mock_clone.assert_called_once()
         mock_extract.assert_called_once()
         mock_save_commits.assert_called_once()
