@@ -12,7 +12,7 @@ from dateutil.relativedelta import relativedelta
 import subprocess
 import math
 import urllib.request
-import urllib.error 
+import urllib.error
 
 from scipy.stats import binom  # <-- ΝΕΟ import
 
@@ -51,8 +51,8 @@ def get_db_connection():
 def create_tables():
     table_check_query = '''
     SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_schema = 'public' 
+        SELECT FROM information_schema.tables
+        WHERE table_schema = 'public'
         AND table_name = 'repositories'
     );
     '''
@@ -96,7 +96,8 @@ def create_tables():
             timestamp TIMESTAMP,
             sha VARCHAR(255),
             detected_kus JSONB,
-            elapsed_time FLOAT
+            elapsed_time FLOAT,
+            ku_source VARCHAR(32) NOT NULL DEFAULT 'legacy'
         )
         '''
     ]
@@ -111,18 +112,23 @@ def create_tables():
         if table_exists:
             print("Tables already exist. Skipping table creation.")
             cur.execute("""
-                SELECT column_name 
-                FROM information_schema.columns 
+                SELECT column_name
+                FROM information_schema.columns
                 WHERE table_name='repositories' AND column_name='organization'
             """)
             if cur.fetchone() is None:
                 print("Adding 'organization' column to existing 'repositories' table.")
                 cur.execute("ALTER TABLE repositories ADD COLUMN organization VARCHAR(255);")
                 conn.commit()
+            # ΝΕΟ: Εφαρμογή migration για ku_source
+            _apply_ku_source_migration(cur, conn)
             return
 
         for command in commands:
             cur.execute(command)
+        # ΝΕΟ: Index για γρήγορα per-source queries
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_analysis_results_ku_source ON analysis_results (ku_source);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_analysis_results_repo_source ON analysis_results (repo_name, ku_source);")
         cur.close()
         conn.commit()
     except Exception as e:
@@ -130,6 +136,37 @@ def create_tables():
     finally:
         if conn is not None:
             conn.close()
+
+
+# ΝΕΟ: Idempotent migration για ku_source — τρέχει σε υπάρχοντες πίνακες
+def _apply_ku_source_migration(cur, conn):
+    """
+    Προσθέτει τη στήλη ku_source στον πίνακα analysis_results αν δεν υπάρχει.
+    Backfill όλων των υπαρχόντων rows ως 'legacy'.
+    """
+    try:
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name='analysis_results' AND column_name='ku_source'
+        """)
+        if cur.fetchone() is None:
+            print("Adding 'ku_source' column to existing 'analysis_results' table...")
+            cur.execute("""
+                ALTER TABLE analysis_results
+                ADD COLUMN ku_source VARCHAR(32) NOT NULL DEFAULT 'legacy';
+            """)
+            cur.execute("UPDATE analysis_results SET ku_source = 'legacy' WHERE ku_source IS NULL;")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_analysis_results_ku_source ON analysis_results (ku_source);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_analysis_results_repo_source ON analysis_results (repo_name, ku_source);")
+            conn.commit()
+            print("ku_source migration applied successfully.")
+        else:
+            print("ku_source column already exists — skipping migration.")
+    except Exception as e:
+        print(f"ku_source migration failed (safe to retry): {e}")
+        conn.rollback()
+
+
 def initialize_database():
     """
     Αρχικοποιεί τη βάση με seed data αν είναι άδεια.
@@ -176,12 +213,12 @@ def initialize_database():
                 "-U", DB_USER,
                 "-d", DB_NAME,
                 "-f", seed_file,
-                "-v", "ON_ERROR_STOP=0",  # συνέχισε ακόμα κι αν υπάρχουν duplicate keys
+                "-v", "ON_ERROR_STOP=0",
             ],
             env=env,
             capture_output=True,
             text=True,
-            timeout=1800,  # 30 λεπτά timeout για 1.17GB
+            timeout=1800,
         )
 
         if result.returncode != 0:
@@ -207,6 +244,10 @@ def initialize_database():
 
         conn.commit()
         logging.info("Τα Apache repositories αφαιρέθηκαν.")
+
+        # ΝΕΟ: Backfill ku_source για seed data (όλα τα seed rows είναι legacy)
+        cur.execute("UPDATE analysis_results SET ku_source = 'legacy' WHERE ku_source IS NULL OR ku_source = '';")
+        conn.commit()
 
         # Επαλήθευση
         cur.execute("SELECT organization, COUNT(*) FROM repositories GROUP BY organization;")
@@ -285,8 +326,8 @@ def get_all_repos_from_db(organization=None):
         with get_db_connection() as conn:
             with conn.cursor() as cur:
                 base_query = '''
-                    SELECT name, url, organization, description, comments, created_at, updated_at, 
-                           analysis_status, analysis_start_time, analysis_end_time, 
+                    SELECT name, url, organization, description, comments, created_at, updated_at,
+                           analysis_status, analysis_start_time, analysis_end_time,
                            analysis_progress, analysis_error_message
                     FROM repositories
                 '''
@@ -390,12 +431,13 @@ def getdetected_kus(organization=None):
                 SELECT ar.detected_kus, ar.author
                 FROM analysis_results ar
                 JOIN repositories r ON ar.repo_name = r.name
-                WHERE r.organization = %s
+                WHERE r.organization = %s AND ar.ku_source = 'legacy'
             ''', (organization,))
         else:
             cur.execute('''
                 SELECT detected_kus, author
                 FROM analysis_results
+                WHERE ku_source = 'legacy'
             ''')
 
         rows = cur.fetchall()
@@ -418,6 +460,10 @@ def getdetected_kus(organization=None):
 
 
 def save_analysis_to_db(repo_name, file_data):
+    """
+    Legacy save — writes with ku_source='legacy'.
+    Το νέο Detector17 χρησιμοποιεί save_analysis_to_db_with_source() από data_db_detector17.
+    """
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -426,8 +472,8 @@ def save_analysis_to_db(repo_name, file_data):
         timestamp_serialized = file_data["timestamp"].isoformat() if isinstance(file_data["timestamp"], datetime) else file_data["timestamp"]
 
         cur.execute('''
-            INSERT INTO analysis_results (repo_name, filename, author, timestamp, sha, detected_kus, elapsed_time)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO analysis_results (repo_name, filename, author, timestamp, sha, detected_kus, elapsed_time, ku_source)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'legacy')
         ''', (
             repo_name,
             file_data["filename"],
@@ -454,7 +500,7 @@ def get_analysis_from_db(repo_name):
         cur.execute('''
             SELECT filename, author, timestamp, sha, detected_kus, elapsed_time
             FROM analysis_results
-            WHERE repo_name = %s
+            WHERE repo_name = %s AND ku_source = 'legacy'
         ''', (repo_name,))
         rows = cur.fetchall()
 
@@ -500,11 +546,12 @@ def get_allanalysis_from_db(organization=None):
             SELECT ar.filename, ar.author, ar.timestamp, ar.sha, ar.detected_kus, ar.elapsed_time
             FROM analysis_results ar
             JOIN repositories r ON ar.repo_name = r.name
+            WHERE ar.ku_source = 'legacy'
         '''
 
         params = []
         if organization:
-            base_query += " WHERE r.organization = %s"
+            base_query += " AND r.organization = %s"
             params.append(organization)
 
         cur.execute(base_query, tuple(params))
@@ -550,7 +597,7 @@ def get_commits_timestamps_from_db(repo_name):
         cur.execute('''
             SELECT DISTINCT timestamp
             FROM analysis_results
-            WHERE repo_name = %s
+            WHERE repo_name = %s AND ku_source = 'legacy'
             ORDER BY timestamp ASC
         ''', (repo_name,))
 
@@ -574,7 +621,7 @@ def get_analysis_withsha_db(sha):
         cur.execute('''
             SELECT filename, author, timestamp, sha, detected_kus, elapsed_time
             FROM analysis_results
-            WHERE sha = %s
+            WHERE sha = %s AND ku_source = 'legacy'
         ''', (sha,))
         rows = cur.fetchall()
 
@@ -723,7 +770,7 @@ def get_ku_counts_from_db(organization=None):
             repositories r ON ar.repo_name = r.name,
             LATERAL jsonb_each_text(ar.detected_kus) AS ku
         WHERE
-            ku.value = '1'
+            ku.value = '1' AND ar.ku_source = 'legacy'
     """
     params = []
     if organization:
@@ -804,6 +851,7 @@ def get_ku_counts_by_organization(organization=None):
             LATERAL jsonb_each_text(ar.detected_kus) AS ku
         WHERE
             r.organization IS NOT NULL AND r.organization != '' AND ku.value = '1'
+            AND ar.ku_source = 'legacy'
     """
     params = []
     if organization:
@@ -857,6 +905,7 @@ def get_monthly_analysis_counts_by_org(organization=None):
             repositories r ON ar.repo_name = r.name
         WHERE
             r.organization IS NOT NULL AND r.organization != ''
+            AND ar.ku_source = 'legacy'
     """
     params = []
     if organization:
@@ -910,7 +959,7 @@ def get_ku_counts_per_repository(organization=None):
             repositories r ON ar.repo_name = r.name,
             LATERAL jsonb_each_text(ar.detected_kus) AS ku
         WHERE
-            ku.value = '1'
+            ku.value = '1' AND ar.ku_source = 'legacy'
     """
     params = []
     if organization:
@@ -994,6 +1043,7 @@ def get_entire_analysis_table():
         cur.execute('''
             SELECT id, repo_name, filename, author, timestamp, sha, detected_kus, elapsed_time
             FROM analysis_results
+            WHERE ku_source = 'legacy'
             ORDER BY repo_name, timestamp;
         ''')
         rows = cur.fetchall()
@@ -1045,6 +1095,8 @@ def get_analysis_results(start_date_str=None, end_date_str=None, organization=No
                 analysis_results ar
             JOIN
                 repositories r ON ar.repo_name = r.name
+            WHERE
+                ar.ku_source = 'legacy'
         '''
 
         conditions = []
@@ -1065,7 +1117,7 @@ def get_analysis_results(start_date_str=None, end_date_str=None, organization=No
             params.append(organization)
 
         if conditions:
-            base_query += " WHERE " + " AND ".join(conditions)
+            base_query += " AND " + " AND ".join(conditions)
 
         base_query += " ORDER BY ar.repo_name, ar.timestamp;"
 
@@ -1114,43 +1166,17 @@ def _probability_of_loss(emps: int, p_individual_leave: float = 0.1, threshold_p
     """
     Υπολογίζει την πιθανότητα να φύγει τουλάχιστον το `threshold_pct` (π.χ. 20%)
     των employees που κατέχουν ένα KU.
-
-    Μοντελοποίηση:
-    - Κάθε employee φεύγει ανεξάρτητα με πιθανότητα `p_individual_leave`.
-    - X ~ Binomial(n=emps, p=p_individual_leave)
-    - Υπολογίζουμε P(X >= k), όπου k = ceil(threshold_pct * emps).
-    - Ειδική περίπτωση: αν emps == 0, δεν υπάρχει κίνδυνος → 0.0
-
-    Args:
-        emps: Αριθμός employees που κατέχουν το KU.
-        p_individual_leave: Πιθανότητα ένας employee να φύγει (default 10%).
-        threshold_pct: Το κατώφλι ως ποσοστό (default 20%).
-
-    Returns:
-        P(X >= ceil(threshold_pct * emps))
     """
     if emps == 0:
         return 0.0
 
-    # Ελάχιστος αριθμός αναχωρήσεων που ορίζει «κίνδυνο»
     k = max(1, math.ceil(threshold_pct * emps))
-
-    # P(X >= k) = 1 - P(X <= k-1)  [binomial survival function]
     p_loss = 1.0 - binom.cdf(k - 1, n=emps, p=p_individual_leave)
-
     return p_loss
 
 def calculate_risks(organization=None, repo_name=None):
     """
-    Calculates KU Risk and Employee Risk.
-    Μπορεί να φιλτραριστεί από organization και/ή repo_name.
-
-    Λογική πιθανότητας απώλειας (p_L):
-    Αντί να απαιτείται να φύγουν *όλοι* οι employees που κατέχουν ένα KU,
-    θεωρούμε ότι αρκεί να φύγει το 20% από αυτούς.
-    Χρησιμοποιούμε Binomial Distribution:
-        p_L = P(X >= ceil(0.20 * emps))
-        όπου X ~ Bin(emps, p=0.10)
+    Calculates KU Risk and Employee Risk — ΜΟΝΟ για legacy KUs.
     """
     try:
         conn = get_db_connection()
@@ -1160,11 +1186,13 @@ def calculate_risks(organization=None, repo_name=None):
             SELECT ar.filename, ar.author, ar.detected_kus
             FROM analysis_results ar
             JOIN repositories r ON ar.repo_name = r.name
+            WHERE ar.ku_source = 'legacy'
         '''
         base_query_count = '''
             SELECT COUNT(DISTINCT ar.filename)
             FROM analysis_results ar
             JOIN repositories r ON ar.repo_name = r.name
+            WHERE ar.ku_source = 'legacy'
         '''
 
         conditions = []
@@ -1178,14 +1206,14 @@ def calculate_risks(organization=None, repo_name=None):
             conditions.append("ar.repo_name = %s")
             params.append(repo_name)
 
-        where_clause = ""
+        where_extra = ""
         if conditions:
-            where_clause = " WHERE " + " AND ".join(conditions)
+            where_extra = " AND " + " AND ".join(conditions)
 
-        cur.execute(base_query_select + where_clause, tuple(params))
+        cur.execute(base_query_select + where_extra, tuple(params))
         analysis_data = cur.fetchall()
 
-        cur.execute(base_query_count + where_clause, tuple(params))
+        cur.execute(base_query_count + where_extra, tuple(params))
         total_files_result = cur.fetchone()
         total_files = total_files_result[0] if total_files_result else 0
 
@@ -1198,7 +1226,6 @@ def calculate_risks(organization=None, repo_name=None):
                 "employee_risk": {}
             }
 
-        # --- Βήμα 2: Aggregation ---
         knowledge_units = defaultdict(lambda: {'freq': 0, 'authors': set()})
         author_ku_map = defaultdict(set)
 
@@ -1209,17 +1236,13 @@ def calculate_risks(organization=None, repo_name=None):
                     knowledge_units[ku]['authors'].add(author)
                     author_ku_map[author].add(ku)
 
-        # --- Βήμα 3: KU Risk ---
         ku_risk_results = {}
-
         for ku, data in knowledge_units.items():
             emps = len(data['authors'])
             freq = data['freq']
-
             p_L = _probability_of_loss(emps)
             impact = freq / total_files
             ku_risk = p_L * impact
-
             ku_risk_results[ku] = {
                 "ku_risk": ku_risk,
                 "probability_of_loss": p_L,
@@ -1229,35 +1252,27 @@ def calculate_risks(organization=None, repo_name=None):
                 "employees_at_risk_threshold": max(1, math.ceil(0.20 * emps))
             }
 
-        # --- Βήμα 4: Employee Risk ---
         employee_risk_results = {}
-
         for author, kus in author_ku_map.items():
             total_delta_risk = 0.0
             total_before_risk = 0.0
-
             for ku in kus:
                 ku_data = knowledge_units[ku]
                 freq = ku_data['freq']
                 emps_before = len(ku_data['authors'])
                 impact = freq / total_files
-
                 p_L_before = _probability_of_loss(emps_before)
                 risk_before = p_L_before * impact
-
                 employees_leaving = max(1, math.ceil(0.20 * emps_before))
                 emps_after = max(0, emps_before - employees_leaving)
-
                 p_L_after = _probability_of_loss(emps_after)
                 risk_after = p_L_after * impact
-
                 delta_risk = risk_after - risk_before
                 total_delta_risk += delta_risk
                 total_before_risk += risk_before
 
             absolute_risk = total_delta_risk
             relative_risk = absolute_risk / total_before_risk if total_before_risk > 0 else 0.0
-
             employee_risk_results[author] = {
                 "absolute_employee_risk": absolute_risk,
                 "relative_employee_risk": relative_risk,
@@ -1288,6 +1303,7 @@ def get_ku_counts_by_developer(developer_name, organization=None):
         WHERE
             ar.author = %s
             AND ku.value = '1'
+            AND ar.ku_source = 'legacy'
     """
     params = [developer_name]
 
@@ -1335,7 +1351,7 @@ def get_all_developer_ku_vectors(start_date_str=None, end_date_str=None, organiz
             LATERAL jsonb_each_text(ar.detected_kus) AS ku
     """
 
-    conditions = ["ku.value = '1'"]
+    conditions = ["ku.value = '1'", "ar.ku_source = 'legacy'"]
     params = []
 
     if start_date_str:
@@ -1419,6 +1435,7 @@ def get_ku_skills_by_organization(organization_name):
         WHERE
             r.organization = %s
             AND ku.value = '1'
+            AND ar.ku_source = 'legacy'
         GROUP BY
             ku_name
         ORDER BY

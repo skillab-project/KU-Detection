@@ -8,6 +8,8 @@ RUN apt-get update && \
 COPY . /app/.
 WORKDIR /app
 
+RUN mkdir -p /app/.cache/huggingface
+
 RUN pip install -r /app/requirements.txt
 EXPOSE 5000
 CMD ["python", "main.py"]

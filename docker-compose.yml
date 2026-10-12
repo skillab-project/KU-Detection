@@ -13,6 +13,16 @@ services:
       - DB_NAME=test
       - DB_USER=root
       - DB_PASSWORD=root
+      # ΝΕΟ: Detector17 model κατεβαίνει από Hugging Face στο πρώτο boot
+      - DETECTOR17_HF_REPO=ElisavetKanidou/ku-detector-17
+      - DETECTOR17_HF_REVISION=main
+      # (προαιρετικό, μόνο αν το repo είναι private)
+      # - HF_TOKEN=hf_xxxxxxxxxxxxxxx
+      # (προαιρετικό, για να αλλάξεις πού γίνεται cache)
+      - HF_HOME=/app/.cache/huggingface
+    # ΝΕΟ: persistent HF cache ώστε να μην ξανακατεβαίνει στα επόμενα boots
+    volumes:
+      - ku_detection_hf_cache:/app/.cache/huggingface
     restart: unless-stopped
     ports:
       - '5000:5000'
@@ -45,6 +55,10 @@ volumes:
     labels:
       io.portainer.accesscontrol.teams: skillab-all
   ku_detection_postgresql_data:
+    labels:
+      io.portainer.accesscontrol.teams: skillab-all
+  # ΝΕΟ: cache για το HF download, επιβιώνει μεταξύ container restarts
+  ku_detection_hf_cache:
     labels:
       io.portainer.accesscontrol.teams: skillab-all
 

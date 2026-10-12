@@ -41,6 +41,7 @@ from flask_swagger_ui import get_swaggerui_blueprint
 from core.ml_operations.loader import load_codebert_model
 from core.analysis.codebert_sliding_window import codebert_sliding_window
 from config.settings import CLONED_REPO_BASE_PATH, CODEBERT_BASE_PATH
+from api.routes_detector17 import detector17_bp
 
 app = Flask(__name__)
 CORS(app, expose_headers=["X-User-Organization"], allow_headers=["Content-Type", "X-User-Organization"])
@@ -696,6 +697,8 @@ def init_routes(app):
             logging.exception(f"Error in /developer_ku_overview endpoint")
             return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
+    
+    app.register_blueprint(detector17_bp)
 
 
 init_routes(app)
