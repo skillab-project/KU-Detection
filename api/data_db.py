@@ -171,21 +171,9 @@ def _apply_ku_source_migration(cur, conn):
 def initialize_database():
     """
     Αρχικοποιεί τη βάση με seed data αν είναι άδεια.
-    
-    Φορτώνει το pg_dump SQL dump μέσω psycopg2 (ΟΧΙ psql CLI), ώστε να μη
-    χρειάζεται εγκατάσταση postgresql-client στο Docker image — απαραίτητο
-    επειδή το Debian bullseye-security apt repo είναι broken (404s σε
-    gnupg/wget/ca-certificates/postgresql-13).
-    
-    Υποστηρίζει πλήρως pg_dump output format:
-      - SET / CREATE TABLE / INSERT / DELETE statements
-      - COPY ... FROM stdin blocks (μέσω cursor.copy_expert με StringIO)
-      - JSONB values και dollar-quoted strings (τα χειρίζεται native το psycopg2)
-      - psql meta-commands (τα αγνοεί — \connect, \restrict κλπ.)
+    Χρησιμοποιεί το psql command για να εκτελέσει το SQL dump αξιόπιστα
+    (streaming, όχι in-memory — αποφεύγει OOM για μεγάλα dumps).
     """
-    import io
-    import re
-
     conn = None
     cur = None
     seed_file = "/tmp/seed_data.sql"
@@ -214,90 +202,35 @@ def initialize_database():
         urllib.request.urlretrieve(seed_url, seed_file)
         logging.info(f"Το αρχείο seed κατέβηκε στο {seed_file}.")
 
-        # ─────────────────────────────────────────────────────────────────
-        # Φόρτωση seed μέσω psycopg2 (COPY-aware parser)
-        # ─────────────────────────────────────────────────────────────────
-        logging.info("Φόρτωση δεδομένων στη βάση μέσω psycopg2 (COPY-aware parser)...")
+        # Εκτέλεση του SQL dump μέσω psql (αξιόπιστο για COPY/JSONB/dollar-quoted)
+        logging.info("Φόρτωση δεδομένων στη βάση μέσω psql...")
+        env = os.environ.copy()
+        env["PGPASSWORD"] = DB_PASSWORD
 
-        conn = get_db_connection()
-        conn.autocommit = True   # απαραίτητο για DDL (CREATE/DROP TABLE)
-        cur = conn.cursor()
-
-        copy_pattern = re.compile(
-            r'^\s*(COPY\s+.*?\s+FROM\s+stdin\s*;)\s*$',
-            re.IGNORECASE
+        result = subprocess.run(
+            [
+                "psql",
+                "-h", DB_HOST,
+                "-p", str(DB_PORT),
+                "-U", DB_USER,
+                "-d", DB_NAME,
+                "-f", seed_file,
+                "-v", "ON_ERROR_STOP=0",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=1800,
         )
 
-        with open(seed_file, 'r', encoding='utf-8') as f:
-            lines = f.read().split('\n')
+        if result.returncode != 0:
+            logging.warning(f"Το psql επέστρεψε κωδικό {result.returncode}")
+            logging.warning(f"stderr (last 2000 chars): {result.stderr[-2000:]}")
+        else:
+            logging.info("Τα δεδομένα seed φορτώθηκαν επιτυχώς.")
 
-        sql_buffer = []
-        i = 0
-        n = len(lines)
-        copy_blocks_executed = 0
-        sql_blocks_executed = 0
-
-        while i < n:
-            line = lines[i]
-
-            # Αγνόησε psql meta-commands (π.χ. \connect, \restrict, \unrestrict)
-            # — το psycopg2 δεν τα καταλαβαίνει. Εξαίρεση: το \. που κλείνει COPY.
-            if line.startswith('\\') and line.rstrip() != '\\.':
-                i += 1
-                continue
-
-            m = copy_pattern.match(line)
-            if m:
-                # 1. Flush pending SQL πριν ξεκινήσει το COPY block
-                if sql_buffer:
-                    sql_text = '\n'.join(sql_buffer).strip()
-                    if sql_text:
-                        cur.execute(sql_text)
-                        sql_blocks_executed += 1
-                    sql_buffer = []
-
-                # 2. Μάζεψε δεδομένα COPY μέχρι το \.
-                copy_header = m.group(1).rstrip(';').strip()
-                copy_data_lines = []
-                i += 1
-                while i < n and lines[i].rstrip() != '\\.':
-                    copy_data_lines.append(lines[i])
-                    i += 1
-
-                # 3. Εκτέλεσε COPY block
-                copy_data = '\n'.join(copy_data_lines) + '\n'
-                cur.copy_expert(copy_header, io.StringIO(copy_data))
-                copy_blocks_executed += 1
-                logging.info(
-                    f"  COPY ok ({len(copy_data_lines)} rows) → "
-                    f"{copy_header[:100]}"
-                )
-
-                # 4. Skip το terminating \.
-                i += 1
-            else:
-                sql_buffer.append(line)
-                i += 1
-
-        # Flush ό,τι SQL έμεινε στο buffer
-        if sql_buffer:
-            sql_text = '\n'.join(sql_buffer).strip()
-            if sql_text:
-                cur.execute(sql_text)
-                sql_blocks_executed += 1
-
-        logging.info(
-            f"Τα δεδομένα seed φορτώθηκαν επιτυχώς: "
-            f"{sql_blocks_executed} SQL blocks, {copy_blocks_executed} COPY blocks."
-        )
-
-        # ─────────────────────────────────────────────────────────────────
-        # Post-seed cleanup (apache repos + ku_source backfill)
-        # ─────────────────────────────────────────────────────────────────
-        cur.close()
-        conn.close()
+        # Νέα σύνδεση για το cleanup (apache repos)
         conn = get_db_connection()
-        conn.autocommit = False   # για να κάνουμε commit explicitly
         cur = conn.cursor()
 
         logging.info("Αφαιρούνται τα 'apache' repositories...")
@@ -310,58 +243,48 @@ def initialize_database():
             WHERE repo_name IN (SELECT name FROM repositories WHERE organization = 'apache');
         """)
         cur.execute("DELETE FROM repositories WHERE organization = 'apache';")
+
         conn.commit()
         logging.info("Τα Apache repositories αφαιρέθηκαν.")
 
         # Backfill ku_source για seed data (όλα τα seed rows είναι legacy)
-        cur.execute(
-            "UPDATE analysis_results "
-            "SET ku_source = 'legacy' "
-            "WHERE ku_source IS NULL OR ku_source = '';"
-        )
+        cur.execute("UPDATE analysis_results SET ku_source = 'legacy' WHERE ku_source IS NULL OR ku_source = '';")
         conn.commit()
 
-        # Επαλήθευση — τύπωσε breakdown ανά organization
+        # Επαλήθευση
         cur.execute("SELECT organization, COUNT(*) FROM repositories GROUP BY organization;")
         for org, cnt in cur.fetchall():
             logging.info(f"  Οργανισμός: {org}, Repositories: {cnt}")
 
-        # Καθαρισμός προσωρινού αρχείου
+        # Καθαρισμός
         if os.path.exists(seed_file):
             os.remove(seed_file)
             logging.info(f"Αφαιρέθηκε το προσωρινό αρχείο: {seed_file}")
 
     except urllib.error.URLError as e:
-        logging.critical(f"Αποτυχία λήψης seed από Hugging Face: {e.reason}")
+        logging.critical(f"Αποτυχία λήψης seed: {e.reason}")
+        raise
+    except subprocess.TimeoutExpired:
+        logging.critical("Timeout κατά την εκτέλεση του psql (>30 λεπτά).")
+        raise
+    except FileNotFoundError as e:
+        logging.critical(f"Δεν βρέθηκε εκτελέσιμο/αρχείο: {e}. Είναι εγκατεστημένο το psql στο container;")
         raise
     except psycopg2.Error as e:
-        logging.exception(f"Σφάλμα PostgreSQL κατά τη φόρτωση seed: {e}")
-        if conn is not None:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+        logging.exception(f"Σφάλμα PostgreSQL: {e}")
+        if conn:
+            conn.rollback()
         raise
-    except Exception:
-        logging.exception("Μη αναμενόμενο σφάλμα κατά την αρχικοποίηση της βάσης:")
-        if conn is not None:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+    except Exception as e:
+        logging.exception("Μη αναμενόμενο σφάλμα κατά την αρχικοποίηση:")
+        if conn:
+            conn.rollback()
         raise
     finally:
         if cur is not None:
-            try:
-                cur.close()
-            except Exception:
-                pass
+            cur.close()
         if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
+            conn.close()
 
 def save_repo_to_db(name, url=None, organization=None, description=None, comments=None):
     try:
