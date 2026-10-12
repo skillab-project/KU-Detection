@@ -2,8 +2,8 @@
   "openapi": "3.0.0",
   "info": {
     "title": "KU-Detection-Back-End API",
-    "version": "1.0.0",
-    "description": "API for the KU-Detection-Back-End project."
+    "version": "1.1.0",
+    "description": "API for the KU-Detection-Back-End project. Includes the legacy K1-K27 detector (CodeBERT) and the new Detector17 (UnixCoder fine-tuned on 17 custom IoT/JEE/DT Knowledge Units)."
   },
   "tags": [
     {
@@ -16,7 +16,7 @@
     },
     {
       "name": "Analysis",
-      "description": "Endpoints for running and retrieving analysis results."
+      "description": "Endpoints for running and retrieving analysis results (legacy K1-K27 detector)."
     },
     {
       "name": "Risk Analysis",
@@ -25,6 +25,10 @@
     {
       "name": "Statistics",
       "description": "Endpoints for retrieving aggregated statistics."
+    },
+    {
+      "name": "Detector17 (17 Custom KUs)",
+      "description": "NEW detector trained on 17 custom Knowledge Units for IoT, JEE, and Digital Twin ecosystems: MQTT, REST_APIs, Concurrency, WebSockets, Messaging_APIs, OPC_UA, Telemetry_Data, Edge_Computing, OTA_Updates, IoT_Security, EMF, Xtext, Eclipse_RCP, Embedded_RTOS, Matter_Thread, IEC_61499, CMake. Model: UnixCoder fine-tuned (ElisavetKanidou/ku-detector-17 on Hugging Face)."
     }
   ],
   "paths": {
@@ -1981,6 +1985,670 @@
                     "error": {
                       "type": "string",
                       "example": "Invalid date format. Please use YYYY-MM."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "An unexpected error occurred"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/detector17/analyze/{repo_name}": {
+      "post": {
+        "tags": [
+          "Detector17 (17 Custom KUs)"
+        ],
+        "summary": "Analyze repository with Detector17",
+        "description": "Starts analysis of a repository using the Detector17 model (UnixCoder fine-tuned on 17 custom IoT/JEE/DT Knowledge Units). Runs file-level inference on changed files per commit. Writes results to the 'analysis_results' table with ku_source='detector17' so they do not interfere with legacy K1-K27 data.",
+        "parameters": [
+          {
+            "name": "X-User-Organization",
+            "in": "header",
+            "required": true,
+            "description": "The name of the organization to filter data by.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "test"
+          },
+          {
+            "name": "repo_name",
+            "in": "path",
+            "required": true,
+            "description": "Name of the repository to analyze (must already exist via POST /repos).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "paho.mqtt.java"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Analysis started in the background.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "example": "Detector17 analysis started in the background."
+                    },
+                    "repo_name": {
+                      "type": "string",
+                      "example": "paho.mqtt.java"
+                    },
+                    "status_endpoint": {
+                      "type": "string",
+                      "example": "/analysis_status?repo_name=paho.mqtt.java"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing X-User-Organization header or invalid repo_name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "X-User-Organization header is required"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Repository not found. Create it first via POST /repos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Repository not found. Create it first via POST /repos."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Analysis is already in progress for this repository.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Analysis already in progress"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "An unexpected error occurred"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/detector17/results/{repo_name}": {
+      "get": {
+        "tags": [
+          "Detector17 (17 Custom KUs)"
+        ],
+        "summary": "Get Detector17 analysis results for a repository",
+        "description": "Returns all Detector17 analysis records for a given repository (filtered by ku_source='detector17' — does NOT include legacy K1-K27 data).",
+        "parameters": [
+          {
+            "name": "X-User-Organization",
+            "in": "header",
+            "required": true,
+            "description": "The name of the organization to filter data by.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "test"
+          },
+          {
+            "name": "repo_name",
+            "in": "path",
+            "required": true,
+            "description": "Name of the repository.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "paho.mqtt.java"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved Detector17 results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "repo_name": {
+                      "type": "string",
+                      "example": "paho.mqtt.java"
+                    },
+                    "total_files": {
+                      "type": "integer",
+                      "example": 342
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "filename": {
+                            "type": "string",
+                            "example": "src/main/java/org/eclipse/paho/client/mqttv3/MqttClient.java"
+                          },
+                          "author": {
+                            "type": "string",
+                            "example": "james.sutton@ibm.com"
+                          },
+                          "timestamp": {
+                            "type": "string",
+                            "format": "date-time",
+                            "example": "2024-05-12T14:23:11"
+                          },
+                          "sha": {
+                            "type": "string",
+                            "example": "a1b2c3d4e5f6"
+                          },
+                          "ku_labels": {
+                            "type": "object",
+                            "description": "Binary labels for each of the 17 KUs (1 = detected, 0 = not detected).",
+                            "additionalProperties": {
+                              "type": "integer",
+                              "enum": [
+                                0,
+                                1
+                              ]
+                            },
+                            "example": {
+                              "MQTT": 1,
+                              "REST_APIs": 0,
+                              "Concurrency": 1,
+                              "WebSockets": 0,
+                              "Messaging_APIs": 1,
+                              "OPC_UA": 0,
+                              "Telemetry_Data": 0,
+                              "Edge_Computing": 0,
+                              "OTA_Updates": 0,
+                              "IoT_Security": 1,
+                              "EMF": 0,
+                              "Xtext": 0,
+                              "Eclipse_RCP": 0,
+                              "Embedded_RTOS": 0,
+                              "Matter_Thread": 0,
+                              "IEC_61499": 0,
+                              "CMake": 0
+                            }
+                          },
+                          "ku_probabilities": {
+                            "type": "object",
+                            "description": "Raw sigmoid probabilities per KU (before threshold=0.5).",
+                            "additionalProperties": {
+                              "type": "number",
+                              "format": "float"
+                            },
+                            "example": {
+                              "MQTT": 0.942,
+                              "REST_APIs": 0.123,
+                              "Concurrency": 0.785,
+                              "WebSockets": 0.088,
+                              "Messaging_APIs": 0.671,
+                              "OPC_UA": 0.014,
+                              "Telemetry_Data": 0.221,
+                              "Edge_Computing": 0.095,
+                              "OTA_Updates": 0.032,
+                              "IoT_Security": 0.618,
+                              "EMF": 0.011,
+                              "Xtext": 0.008,
+                              "Eclipse_RCP": 0.019,
+                              "Embedded_RTOS": 0.026,
+                              "Matter_Thread": 0.015,
+                              "IEC_61499": 0.012,
+                              "CMake": 0.021
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing X-User-Organization header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "X-User-Organization header is required"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Repository not found or no Detector17 results yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "No Detector17 results found for this repository"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "An unexpected error occurred"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/detector17/contributors/{repo_name}": {
+      "get": {
+        "tags": [
+          "Detector17 (17 Custom KUs)"
+        ],
+        "summary": "List contributors with Detector17 analysis",
+        "description": "Returns the list of contributors (authors) who have Detector17 analysis records in the given repository, along with their file counts and most recent commit timestamp.",
+        "parameters": [
+          {
+            "name": "X-User-Organization",
+            "in": "header",
+            "required": true,
+            "description": "The name of the organization to filter data by.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "test"
+          },
+          {
+            "name": "repo_name",
+            "in": "path",
+            "required": true,
+            "description": "Name of the repository.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "paho.mqtt.java"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved contributors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "repo_name": {
+                      "type": "string",
+                      "example": "paho.mqtt.java"
+                    },
+                    "contributors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "author": {
+                            "type": "string",
+                            "example": "james.sutton@ibm.com"
+                          },
+                          "file_count": {
+                            "type": "integer",
+                            "example": 47
+                          },
+                          "last_commit": {
+                            "type": "string",
+                            "format": "date-time",
+                            "example": "2024-05-12T14:23:11"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing X-User-Organization header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "X-User-Organization header is required"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Repository not found or no Detector17 results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "No contributors found for this repository"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "An unexpected error occurred"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/detector17/kus/{repo_name}/{contributor}": {
+      "get": {
+        "tags": [
+          "Detector17 (17 Custom KUs)"
+        ],
+        "summary": "Get per-KU file counts for a contributor",
+        "description": "For the given contributor in the given repository, returns the number of files where each of the 17 Detector17 KUs was detected. Used by the heatmap UI.",
+        "parameters": [
+          {
+            "name": "X-User-Organization",
+            "in": "header",
+            "required": true,
+            "description": "The name of the organization to filter data by.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "test"
+          },
+          {
+            "name": "repo_name",
+            "in": "path",
+            "required": true,
+            "description": "Name of the repository.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "paho.mqtt.java"
+          },
+          {
+            "name": "contributor",
+            "in": "path",
+            "required": true,
+            "description": "Email or name of the contributor (URL-encode special characters, e.g. '@' → '%40').",
+            "schema": {
+              "type": "string"
+            },
+            "example": "james.sutton%40ibm.com"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-KU file counts for the contributor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "repo_name": {
+                      "type": "string",
+                      "example": "paho.mqtt.java"
+                    },
+                    "contributor": {
+                      "type": "string",
+                      "example": "james.sutton@ibm.com"
+                    },
+                    "total_files": {
+                      "type": "integer",
+                      "example": 47
+                    },
+                    "ku_counts": {
+                      "type": "object",
+                      "description": "Number of files where each of the 17 KUs was detected (ku_label = 1).",
+                      "additionalProperties": {
+                        "type": "integer"
+                      },
+                      "example": {
+                        "MQTT": 42,
+                        "REST_APIs": 3,
+                        "Concurrency": 28,
+                        "WebSockets": 1,
+                        "Messaging_APIs": 35,
+                        "OPC_UA": 0,
+                        "Telemetry_Data": 2,
+                        "Edge_Computing": 0,
+                        "OTA_Updates": 0,
+                        "IoT_Security": 18,
+                        "EMF": 0,
+                        "Xtext": 0,
+                        "Eclipse_RCP": 0,
+                        "Embedded_RTOS": 0,
+                        "Matter_Thread": 0,
+                        "IEC_61499": 0,
+                        "CMake": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing X-User-Organization header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "X-User-Organization header is required"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Repository or contributor not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "No records found for this contributor"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "An unexpected error occurred"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/detector17/analysis/{repo_name}": {
+      "delete": {
+        "tags": [
+          "Detector17 (17 Custom KUs)"
+        ],
+        "summary": "Delete all Detector17 analysis for a repository",
+        "description": "Removes ALL Detector17 analysis records for the given repository (rows with ku_source='detector17'). Does NOT touch the repository entry itself or any legacy K1-K27 data. Useful for re-running analysis from scratch.",
+        "parameters": [
+          {
+            "name": "X-User-Organization",
+            "in": "header",
+            "required": true,
+            "description": "The name of the organization to filter data by.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "test"
+          },
+          {
+            "name": "repo_name",
+            "in": "path",
+            "required": true,
+            "description": "Name of the repository.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "paho.mqtt.java"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Detector17 analysis deleted successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "example": "Deleted all Detector17 analysis for paho.mqtt.java"
+                    },
+                    "rows_deleted": {
+                      "type": "integer",
+                      "example": 342
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing X-User-Organization header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "X-User-Organization header is required"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Repository not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Repository not found"
                     }
                   }
                 }
