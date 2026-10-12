@@ -1,6 +1,6 @@
 FROM nikosnikolaidis/skillab-ku-backend-base
 
-# ⭐ Install postgresql-client από το PGDG repo ΧΩΡΙΣ gpg verification.
+# Install postgresql-client από το PGDG repo ΧΩΡΙΣ gpg verification.
 # Λόγος: το Debian bullseye-security repo είναι broken (404s) ακόμα και για
 # gnupg/wget/ca-certificates, άρα δεν μπορούμε να εγκαταστήσουμε gnupg για
 # να επαληθεύσουμε την PGDG signature. Το [trusted=yes] παρακάμπτει
