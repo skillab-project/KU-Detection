@@ -146,11 +146,13 @@ def load_detector17_model(checkpoint_dir: str = None,
     if checkpoint_dir is None:
         checkpoint_dir = _resolve_checkpoint_dir()
 
-    # Tokenizer: prefer fine-tuned local, fall back to HF base
-    if os.path.isfile(os.path.join(checkpoint_dir, "tokenizer_config.json")):
-        tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(base_model_name)
+    # Tokenizer: ALWAYS use the base UnixCoder tokenizer.
+    # We only fine-tuned the classification head (768→256→17), not the tokenizer,
+    # so the base tokenizer is identical to the fine-tuned one. Loading from the
+    # local checkpoint can fail with version incompatibilities between the
+    # transformers version that saved it (newer) and the one running here (4.41.2).
+    tokenizer = AutoTokenizer.from_pretrained(base_model_name)
+    log.info(f"[Detector17] Using base tokenizer: {base_model_name}")
 
     model = Detector17Classifier(base_model_name).to(device)
     ckpt_path = os.path.join(checkpoint_dir, "best_model.pt")
