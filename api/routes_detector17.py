@@ -34,6 +34,8 @@ import logging
 import time
 import os
 import concurrent.futures
+import threading
+
 
 import git
 from flask import Blueprint, request, jsonify
@@ -62,23 +64,37 @@ from api.data_db_detector17 import (
 # ─────────────────────────────────────────────────────────────────────────
 detector17_bp = Blueprint("detector17", __name__, url_prefix="/detector17")
 
+
 _DETECTOR17_MODEL = None
+_DETECTOR17_MODEL_LOCK = threading.Lock()   # ΝΕΟ: thread-safe lazy init
 
 
 def _get_model():
-    """Lazy-load the Detector17 model on first request (thread-safe via GIL)."""
+    """
+    Lazy-load the Detector17 model on first request.
+    
+    Delegates checkpoint resolution to load_detector17_model(checkpoint_dir=None),
+    which reads env vars in this priority order:
+      1. DETECTOR17_HF_REPO   → downloads from Hugging Face (ElisavetKanidou/ku-detector-17)
+      2. DETECTOR17_MODEL_PATH → local directory fallback
+    
+    Thread-safe via a double-checked lock — prevents the 5 concurrent repo
+    tasks from each triggering a redundant HF download on cold start.
+    """
     global _DETECTOR17_MODEL
     if _DETECTOR17_MODEL is None:
-        model_dir = os.getenv(
-            "DETECTOR17_MODEL_PATH",
-            os.path.join(os.path.dirname(__file__), "..", "models", "ku-detector-17"),
-        )
-        logging.info(f"[detector17] Loading model from {model_dir} ...")
-        _DETECTOR17_MODEL = load_detector17_model(model_dir)
-        logging.info("[detector17] Model loaded.")
+        with _DETECTOR17_MODEL_LOCK:
+            if _DETECTOR17_MODEL is None:   # double-check inside the lock
+                logging.info(
+                    "[detector17] Loading model (resolving from env: "
+                    "DETECTOR17_HF_REPO / DETECTOR17_MODEL_PATH)..."
+                )
+                # Pass None so the loader reads env vars itself and
+                # downloads from HF if DETECTOR17_HF_REPO is set.
+                _DETECTOR17_MODEL = load_detector17_model(checkpoint_dir=None)
+                logging.info("[detector17] Model loaded.")
     return _DETECTOR17_MODEL
-
-
+    
 # ─────────────────────────────────────────────────────────────────────────
 # Background executors (match legacy /analyze pattern)
 # ─────────────────────────────────────────────────────────────────────────
