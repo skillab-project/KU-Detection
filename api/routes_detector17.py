@@ -11,6 +11,16 @@ Registered under /detector17/* in main.py:
 Progress is tracked via the shared analysis_status table — poll it with the
 legacy GET /analysis_status?repo_name=<name> endpoint.
 
+Why we bypass extract_contributions + read_files_from_dict_list:
+  - The legacy loader filters for .java only (K1-K27 is Java-focused).
+  - It skips files whose SHA already has ANY analysis — so a repo analyzed by
+    the legacy /analyze endpoint can never be analyzed by Detector17 afterwards.
+  - It uses basename-only as dict key — files with same name in different
+    directories overwrite each other.
+Detector17 was trained on C/C++, Java, Python, JS, Xtext/EMF, etc. We walk
+git log directly with GitPython, filter by a broader extension set, and build
+CodeFile objects in-memory (no DB round-trip for raw commits).
+
 Threading model (matches legacy /analyze):
   - 1 outer ThreadPoolExecutor (max_workers=5) → up to 5 repos analyzed in parallel
   - 1 inner ThreadPoolExecutor (max_workers=MAX_WORKERS, default 4) per repo
@@ -25,16 +35,17 @@ import time
 import os
 import concurrent.futures
 
+import git
 from flask import Blueprint, request, jsonify
 
-from core.utils.code_files_loader import read_files_from_dict_list
-from core.git_operations import clone_repo, repo_exists, extract_contributions
+from core.utils.code_file import CodeFile
+from core.git_operations import clone_repo, repo_exists
 from core.git_operations.repo import pull_repo
 from core.analysis.detector17_analyzer import detector17_file_scan
 from core.ml_operations.detector17_loader import load_detector17_model
 from config.settings import CLONED_REPO_BASE_PATH
 from api.data_db import (
-    save_commits_to_db, get_commits_from_db, get_all_repos_from_db,
+    get_all_repos_from_db,
     update_analysis_status, get_analysis_status,
 )
 from api.data_db_detector17 import (
@@ -71,17 +82,140 @@ def _get_model():
 # ─────────────────────────────────────────────────────────────────────────
 # Background executors (match legacy /analyze pattern)
 # ─────────────────────────────────────────────────────────────────────────
-# Outer: 5 concurrent repo analyses (one task per repo)
 _detector17_bg_executor = concurrent.futures.ThreadPoolExecutor(
     max_workers=5, thread_name_prefix="det17-repo"
 )
 
-# Inner (per-task): parallelize file analysis within a single repo
 try:
     _MAX_FILE_WORKERS = int(os.getenv("DETECTOR17_FILE_WORKERS",
                                       os.getenv("ANALYSIS_WORKERS", "4")))
 except (ValueError, TypeError):
     _MAX_FILE_WORKERS = 4
+
+try:
+    _COMMIT_LIMIT = int(os.getenv("DETECTOR17_COMMIT_LIMIT", "50"))
+except (ValueError, TypeError):
+    _COMMIT_LIMIT = 50
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File filtering — Detector17 accepts a broader extension set than legacy
+# ─────────────────────────────────────────────────────────────────────────
+_DETECTOR17_EXTENSIONS = {
+    # C/C++ (IoT, Embedded_RTOS, OPC_UA, MQTT native implementations)
+    '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx',
+    # Java (JEE, Eclipse_RCP, EMF, MQTT Java clients)
+    '.java',
+    # Python (scripts, IoT prototyping)
+    '.py',
+    # JavaScript/TypeScript (REST_APIs, WebSockets)
+    '.js', '.ts', '.jsx', '.tsx', '.mjs',
+    # Go/Rust (modern IoT, microservices)
+    '.go', '.rs',
+    # Xtext/EMF model files
+    '.xtend', '.ecore', '.xtext',
+    # Build systems (CMake KU)
+    '.cmake',
+}
+_DETECTOR17_SPECIAL_FILENAMES = {'CMakeLists.txt'}
+# Skip very large files (>500KB) — likely generated code, slow to tokenize
+_MAX_FILE_SIZE_BYTES = 500 * 1024
+
+
+def _is_analyzable_for_detector17(path: str) -> bool:
+    """Return True if this file path is relevant for the 17 custom KUs."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in _DETECTOR17_EXTENSIONS:
+        return True
+    if os.path.basename(path) in _DETECTOR17_SPECIAL_FILENAMES:
+        return True
+    return False
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Direct git log walker — bypasses legacy extract_contributions pipeline
+# ─────────────────────────────────────────────────────────────────────────
+def _extract_detector17_files(local_path: str, commit_limit: int = _COMMIT_LIMIT):
+    """
+    Walk git log directly and build CodeFile objects for Detector17.
+
+    Bypasses the legacy pipeline:
+      - extract_contributions (which filters .java only)
+      - save_commits_to_db / get_commits_from_db (DB round-trip not needed)
+      - read_files_from_dict_list (which skips files whose SHA already has
+        legacy analysis, and overwrites basename collisions)
+
+    Returns a dict {unique_key: CodeFile} ready for Detector17 inference.
+    The unique_key is "<sha_short>:<relative_path>" so files with the same
+    basename in different directories don't collide.
+    """
+    repo = git.Repo(local_path)
+    commits = list(repo.iter_commits('HEAD', max_count=commit_limit))
+    logging.info(
+        f"[detector17] walking {len(commits)} commits in {local_path} "
+        f"(limit={commit_limit})"
+    )
+
+    files = {}
+    for commit in commits:
+        try:
+            # Diff vs first parent; for root commit, list all files
+            if commit.parents:
+                parent = commit.parents[0]
+                diffs = parent.diff(commit, create_patch=False)
+            else:
+                diffs = commit.diff(git.NULL_TREE, create_patch=False, R=True)
+
+            for diff in diffs:
+                # Prefer the "new" path (b_path); fall back to old (a_path)
+                path = diff.b_path or diff.a_path
+                if not path or not _is_analyzable_for_detector17(path):
+                    continue
+
+                # Read file content at this commit via the tree blob
+                try:
+                    blob = commit.tree / path
+                    content_bytes = blob.data_stream.read()
+                except (KeyError, Exception) as e:
+                    # File was deleted in this commit or path doesn't resolve
+                    logging.debug(
+                        f"[detector17] skip {path} @ {commit.hexsha[:8]}: {e}"
+                    )
+                    continue
+
+                if len(content_bytes) > _MAX_FILE_SIZE_BYTES:
+                    logging.debug(
+                        f"[detector17] skip oversized {path} "
+                        f"({len(content_bytes)} bytes)"
+                    )
+                    continue
+
+                try:
+                    content = content_bytes.decode('utf-8', errors='ignore')
+                except Exception:
+                    continue
+
+                if len(content.strip()) == 0:
+                    continue
+
+                # Unique key avoids basename-collision overwrites
+                unique_key = f"{commit.hexsha[:8]}:{path}"
+                files[unique_key] = CodeFile(
+                    filename=path,   # full relative path, not basename
+                    content=content,
+                    author=commit.author.email or commit.author.name or "unknown",
+                    timestamp=commit.committed_datetime,
+                    sha=commit.hexsha,
+                )
+        except Exception as e:
+            logging.exception(
+                f"[detector17] failed on commit {commit.hexsha[:8]}: {e}"
+            )
+
+    logging.info(
+        f"[detector17] extracted {len(files)} analyzable files from {local_path}"
+    )
+    return files
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -119,15 +253,15 @@ def _analyze_single_file_detector17(file, model):
 # ─────────────────────────────────────────────────────────────────────────
 def _analyze_detector17_repository_task(repo_name, repo_url, local_path):
     """
-    Background task: clones/pulls the repo, extracts commits, runs Detector17
-    on each file (in parallel via inner ThreadPoolExecutor), and saves rows
-    with ku_source='detector17'. Updates analysis_status throughout so the
-    legacy GET /analysis_status endpoint reflects progress.
+    Background task: clones/pulls the repo, walks git log directly (bypassing
+    the legacy .java-only pipeline), runs Detector17 on each file in parallel,
+    and saves rows with ku_source='detector17'. Updates analysis_status
+    throughout so the legacy GET /analysis_status endpoint reflects progress.
     """
     start_time = datetime.datetime.now()
     logging.info(
         f"[detector17] BG TASK: starting analysis for '{repo_name}' "
-        f"(workers={_MAX_FILE_WORKERS})"
+        f"(file_workers={_MAX_FILE_WORKERS}, commit_limit={_COMMIT_LIMIT})"
     )
     update_analysis_status(repo_name, "in-progress",
                            start_time=start_time, progress=0)
@@ -139,25 +273,27 @@ def _analyze_detector17_repository_task(repo_name, repo_url, local_path):
             clone_repo(repo_url, local_path)
         else:
             logging.info(f"[detector17] pulling {local_path}")
-            pull_repo(local_path)
+            try:
+                pull_repo(local_path)
+            except Exception as e:
+                logging.warning(f"[detector17] pull failed, continuing: {e}")
 
-        # 2. Pull commits (reuse DB cache if available)
-        commits = get_commits_from_db(repo_name)
-        if not commits:
-            logging.info(f"[detector17] extracting commits from {local_path}")
-            commits_history = extract_contributions(local_path, commit_limit=50)
-            save_commits_to_db(repo_name, commits_history)
-            commits = get_commits_from_db(repo_name)
-
-        files = read_files_from_dict_list(commits)
+        # 2. Build file list directly from git log (bypass legacy loader)
+        files = _extract_detector17_files(local_path, commit_limit=_COMMIT_LIMIT)
         total = len(files)
         if total == 0:
-            logging.warning(f"[detector17] no analyzable files for {repo_name}")
+            logging.warning(
+                f"[detector17] no analyzable files for {repo_name} "
+                f"(no C/C++/Java/Python files in last {_COMMIT_LIMIT} commits)"
+            )
             update_analysis_status(
                 repo_name, "error",
                 start_time=start_time,
                 end_time=datetime.datetime.now(),
-                error_message="No analyzable files found."
+                error_message=(
+                    f"No files with supported extensions found in last "
+                    f"{_COMMIT_LIMIT} commits."
+                )
             )
             return
 
@@ -285,10 +421,10 @@ def analyze_detector17(repo_name):
             f"(up to 5 repos run in parallel)"
         )
         return jsonify({
-            "message":         "Detector17 analysis started in the background.",
-            "repo_name":       repo_name,
-            "ku_source":       "detector17",
-            "status_endpoint": f"/analysis_status?repo_name={repo_name}",
+            "message":          "Detector17 analysis started in the background.",
+            "repo_name":        repo_name,
+            "ku_source":        "detector17",
+            "status_endpoint":  f"/analysis_status?repo_name={repo_name}",
             "results_endpoint": f"/detector17/results/{repo_name}",
         }), 202
     except Exception as e:
