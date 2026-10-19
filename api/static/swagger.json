@@ -2016,7 +2016,7 @@
           "Detector17 (17 Custom KUs)"
         ],
         "summary": "Analyze repository with Detector17",
-        "description": "Starts analysis of a repository using the Detector17 model (UnixCoder fine-tuned on 17 custom IoT/JEE/DT Knowledge Units). Runs file-level inference on changed files per commit. Writes results to the 'analysis_results' table with ku_source='detector17' so they do not interfere with legacy K1-K27 data.",
+        "description": "Starts analysis of a repository using the Detector17 model (UnixCoder fine-tuned on 17 custom IoT/JEE/DT Knowledge Units). Runs file-level inference on changed files per commit. Writes results to the 'analysis_results' table with ku_source='detector17' so they do not interfere with legacy K1-K27 data.\n\nThe caller SHOULD provide `commit_limit` to control how far back in git history the scan walks. Resolution order: JSON body → query string → env default (`DETECTOR17_COMMIT_LIMIT`, currently 50). Allowed range: 1–500.",
         "parameters": [
           {
             "name": "X-User-Organization",
@@ -2037,8 +2037,40 @@
               "type": "string"
             },
             "example": "paho.mqtt.java"
+          },
+          {
+            "name": "commit_limit",
+            "in": "query",
+            "required": false,
+            "description": "Optional. Overrides the environment default. Also acceptable in the JSON body — if both are present, the body wins. Must be an integer in [1, 500].",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            },
+            "example": 100
           }
         ],
+        "requestBody": {
+          "required": false,
+          "description": "Optional. Preferred way to pass `commit_limit`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "commit_limit": {
+                    "type": "integer",
+                    "description": "How many of the most recent non-merge commits to walk when extracting files for inference. Must be between 1 and 500.",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "example": 100
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "description": "Analysis started in the background.",
@@ -2055,9 +2087,28 @@
                       "type": "string",
                       "example": "paho.mqtt.java"
                     },
+                    "ku_source": {
+                      "type": "string",
+                      "example": "detector17"
+                    },
+                    "commit_limit": {
+                      "type": "integer",
+                      "description": "The commit_limit actually used for this analysis.",
+                      "example": 100
+                    },
+                    "commit_limit_source": {
+                      "type": "string",
+                      "description": "'user' if provided via body/query, 'default' if the env default was used.",
+                      "enum": ["user", "default"],
+                      "example": "user"
+                    },
                     "status_endpoint": {
                       "type": "string",
                       "example": "/analysis_status?repo_name=paho.mqtt.java"
+                    },
+                    "results_endpoint": {
+                      "type": "string",
+                      "example": "/detector17/results/paho.mqtt.java"
                     }
                   }
                 }
@@ -2065,7 +2116,7 @@
             }
           },
           "400": {
-            "description": "Missing X-User-Organization header or invalid repo_name.",
+            "description": "Missing X-User-Organization header, or commit_limit is not an integer in [1, 500].",
             "content": {
               "application/json": {
                 "schema": {
@@ -2073,7 +2124,7 @@
                   "properties": {
                     "error": {
                       "type": "string",
-                      "example": "X-User-Organization header is required"
+                      "example": "commit_limit must be between 1 and 500"
                     }
                   }
                 }
@@ -2649,6 +2700,297 @@
                     "error": {
                       "type": "string",
                       "example": "Repository not found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "An unexpected error occurred"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/detector17/ku_risk": {
+      "get": {
+        "tags": [
+          "Detector17 (17 Custom KUs)"
+        ],
+        "summary": "Calculate KU Risk (Detector17)",
+        "description": "Returns the risk associated with each Detector17 KU (ku_source='detector17'). Uses the same binomial model as the legacy /ku_risk endpoint (20% departure threshold, p_individual_leave=0.1), but computed over the 17 custom IoT/JEE/DT KUs ONLY — legacy K1-K27 rows are not included.",
+        "parameters": [
+          {
+            "name": "X-User-Organization",
+            "in": "header",
+            "required": true,
+            "description": "The name of the organization to filter data by.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "test"
+          },
+          {
+            "name": "repo_name",
+            "in": "query",
+            "required": false,
+            "description": "Optional. Restrict the calculation to a single repository within the organization. If omitted, the risk is calculated over the entire organization.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "paho.mqtt.java"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "KU Risk calculation was successful.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "ku_name": {
+                        "type": "string",
+                        "example": "MQTT"
+                      },
+                      "ku_risk": {
+                        "type": "number",
+                        "format": "float",
+                        "example": 0.00241
+                      },
+                      "probability_of_loss": {
+                        "type": "number",
+                        "format": "float",
+                        "example": 0.019
+                      },
+                      "impact": {
+                        "type": "number",
+                        "format": "float",
+                        "example": 0.127
+                      },
+                      "employee_count": {
+                        "type": "integer",
+                        "example": 4
+                      },
+                      "file_frequency": {
+                        "type": "integer",
+                        "example": 43
+                      },
+                      "employees_at_risk_threshold": {
+                        "type": "integer",
+                        "example": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing X-User-Organization header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "X-User-Organization header is required"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "An unexpected error occurred"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/detector17/employee_risk": {
+      "get": {
+        "tags": [
+          "Detector17 (17 Custom KUs)"
+        ],
+        "summary": "Calculate Employee Risk (Detector17)",
+        "description": "Returns the risk associated with the hypothetical departure of each employee, considering ONLY KUs from the Detector17 taxonomy (ku_source='detector17'). Mirrors the legacy /employee_risk endpoint in shape and semantics.",
+        "parameters": [
+          {
+            "name": "X-User-Organization",
+            "in": "header",
+            "required": true,
+            "description": "The name of the organization to filter data by.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "test"
+          },
+          {
+            "name": "repo_name",
+            "in": "query",
+            "required": false,
+            "description": "Optional. Restrict the calculation to a single repository within the organization. If omitted, the risk is calculated over the entire organization.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "paho.mqtt.java"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Employee Risk calculation was successful.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "employee_name": {
+                        "type": "string",
+                        "example": "james.sutton@ibm.com"
+                      },
+                      "absolute_employee_risk": {
+                        "type": "number",
+                        "format": "float",
+                        "example": 0.0142
+                      },
+                      "relative_employee_risk": {
+                        "type": "number",
+                        "format": "float",
+                        "example": 6.3
+                      },
+                      "ku_count": {
+                        "type": "integer",
+                        "example": 7
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing X-User-Organization header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "X-User-Organization header is required"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "An unexpected error occurred"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/detector17/organizationskills": {
+      "get": {
+        "tags": [
+          "Detector17 (17 Custom KUs)"
+        ],
+        "summary": "Get Organization KU Skills (Detector17)",
+        "description": "Retrieves a summary of 'knowledge skills' for the organization specified in the X-User-Organization header, computed over Detector17 KUs ONLY (ku_source='detector17'). For each of the 17 custom KUs, returns the total number of unique files and unique authors. Mirrors the legacy /organizationskills endpoint in shape and semantics.",
+        "parameters": [
+          {
+            "name": "X-User-Organization",
+            "in": "header",
+            "required": true,
+            "description": "The name of the organization to filter data by.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "test"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved the skills overview.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "ku_name": {
+                        "type": "string",
+                        "example": "MQTT"
+                      },
+                      "total_files": {
+                        "type": "integer",
+                        "example": 125
+                      },
+                      "total_authors": {
+                        "type": "integer",
+                        "example": 8
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing X-User-Organization header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "X-User-Organization header is required"
                     }
                   }
                 }

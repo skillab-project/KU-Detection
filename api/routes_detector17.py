@@ -2,11 +2,19 @@
 Flask Blueprint with Detector17-specific endpoints.
 
 Registered under /detector17/* in main.py:
-  POST /detector17/analyze/<repo_name>       — kick off analysis in background (202 Accepted)
-  GET  /detector17/results/<repo_name>       — rows (raw)
-  GET  /detector17/contributors/<repo_name>  — aggregated per-contributor KU counts
-  GET  /detector17/kus                       — global KU counts for the detector17 taxonomy
-  DELETE /detector17/analysis/<repo_name>    — wipe detector17 rows for one repo
+  POST   /detector17/analyze/<repo_name>       — kick off analysis in background (202)
+  GET    /detector17/results/<repo_name>       — rows (raw)
+  GET    /detector17/contributors/<repo_name>  — aggregated per-contributor KU counts
+  GET    /detector17/kus                       — global KU counts for the detector17 taxonomy
+  DELETE /detector17/analysis/<repo_name>      — wipe detector17 rows for one repo
+  GET    /detector17/ku_risk                   — per-KU risk (binomial, 20% threshold)   [NEW]
+  GET    /detector17/employee_risk             — per-employee delta risk if they leave   [NEW]
+  GET    /detector17/organizationskills        — per-KU files/authors for an organisation [NEW]
+
+The 3 NEW endpoints mirror the legacy /ku_risk, /employee_risk and
+/organizationskills exactly in request/response shape, but compute over
+ku_source='detector17' rows only — the legacy K1-K27 endpoints are
+untouched and continue to operate on ku_source='legacy'.
 
 Progress is tracked via the shared analysis_status table — poll it with the
 legacy GET /analysis_status?repo_name=<name> endpoint.
@@ -56,6 +64,9 @@ from api.data_db_detector17 import (
     get_ku_counts_by_source,
     get_contributor_kus_by_source,
     delete_analysis_by_source,
+    # ΝΕΟ: risk & skills για το ku_source='detector17'
+    calculate_risks_detector17,
+    get_ku_skills_by_organization_detector17,
 )
 
 
@@ -72,12 +83,12 @@ _DETECTOR17_MODEL_LOCK = threading.Lock()   # ΝΕΟ: thread-safe lazy init
 def _get_model():
     """
     Lazy-load the Detector17 model on first request.
-    
+
     Delegates checkpoint resolution to load_detector17_model(checkpoint_dir=None),
     which reads env vars in this priority order:
       1. DETECTOR17_HF_REPO   → downloads from Hugging Face (ElisavetKanidou/ku-detector-17)
       2. DETECTOR17_MODEL_PATH → local directory fallback
-    
+
     Thread-safe via a double-checked lock — prevents the 5 concurrent repo
     tasks from each triggering a redundant HF download on cold start.
     """
@@ -94,7 +105,7 @@ def _get_model():
                 _DETECTOR17_MODEL = load_detector17_model(checkpoint_dir=None)
                 logging.info("[detector17] Model loaded.")
     return _DETECTOR17_MODEL
-    
+
 # ─────────────────────────────────────────────────────────────────────────
 # Background executors (match legacy /analyze pattern)
 # ─────────────────────────────────────────────────────────────────────────
@@ -109,9 +120,13 @@ except (ValueError, TypeError):
     _MAX_FILE_WORKERS = 4
 
 try:
-    _COMMIT_LIMIT = int(os.getenv("DETECTOR17_COMMIT_LIMIT", "50"))
+    _COMMIT_LIMIT_DEFAULT = int(os.getenv("DETECTOR17_COMMIT_LIMIT", "50"))
 except (ValueError, TypeError):
-    _COMMIT_LIMIT = 50
+    _COMMIT_LIMIT_DEFAULT = 50
+
+# Bounds for user-supplied commit_limit (prevents runaway analyses)
+_COMMIT_LIMIT_MIN = 1
+_COMMIT_LIMIT_MAX = 500
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -151,7 +166,7 @@ def _is_analyzable_for_detector17(path: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────
 # Direct git log walker — bypasses legacy extract_contributions pipeline
 # ─────────────────────────────────────────────────────────────────────────
-def _extract_detector17_files(local_path: str, commit_limit: int = _COMMIT_LIMIT):
+def _extract_detector17_files(local_path: str, commit_limit: int = _COMMIT_LIMIT_DEFAULT):
     """
     Walk git log directly and build CodeFile objects for Detector17.
 
@@ -267,17 +282,21 @@ def _analyze_single_file_detector17(file, model):
 # ─────────────────────────────────────────────────────────────────────────
 # Background task — one per repo (runs inside _detector17_bg_executor)
 # ─────────────────────────────────────────────────────────────────────────
-def _analyze_detector17_repository_task(repo_name, repo_url, local_path):
+def _analyze_detector17_repository_task(repo_name, repo_url, local_path, commit_limit):
     """
     Background task: clones/pulls the repo, walks git log directly (bypassing
     the legacy .java-only pipeline), runs Detector17 on each file in parallel,
     and saves rows with ku_source='detector17'. Updates analysis_status
     throughout so the legacy GET /analysis_status endpoint reflects progress.
+
+    `commit_limit` is now resolved from the HTTP request in analyze_detector17()
+    (body or query string; env default as fallback) rather than from a
+    module-level constant — this lets each caller tune the scope of its scan.
     """
     start_time = datetime.datetime.now()
     logging.info(
         f"[detector17] BG TASK: starting analysis for '{repo_name}' "
-        f"(file_workers={_MAX_FILE_WORKERS}, commit_limit={_COMMIT_LIMIT})"
+        f"(file_workers={_MAX_FILE_WORKERS}, commit_limit={commit_limit})"
     )
     update_analysis_status(repo_name, "in-progress",
                            start_time=start_time, progress=0)
@@ -295,12 +314,12 @@ def _analyze_detector17_repository_task(repo_name, repo_url, local_path):
                 logging.warning(f"[detector17] pull failed, continuing: {e}")
 
         # 2. Build file list directly from git log (bypass legacy loader)
-        files = _extract_detector17_files(local_path, commit_limit=_COMMIT_LIMIT)
+        files = _extract_detector17_files(local_path, commit_limit=commit_limit)
         total = len(files)
         if total == 0:
             logging.warning(
                 f"[detector17] no analyzable files for {repo_name} "
-                f"(no C/C++/Java/Python files in last {_COMMIT_LIMIT} commits)"
+                f"(no C/C++/Java/Python files in last {commit_limit} commits)"
             )
             update_analysis_status(
                 repo_name, "error",
@@ -308,7 +327,7 @@ def _analyze_detector17_repository_task(repo_name, repo_url, local_path):
                 end_time=datetime.datetime.now(),
                 error_message=(
                     f"No files with supported extensions found in last "
-                    f"{_COMMIT_LIMIT} commits."
+                    f"{commit_limit} commits."
                 )
             )
             return
@@ -396,12 +415,47 @@ def analyze_detector17(repo_name):
     """
     Kick off Detector17 analysis in the background (returns 202 immediately).
 
+    The caller SHOULD provide `commit_limit` to control how far back in git
+    history the scan walks. Resolution order:
+      1. JSON body:   {"commit_limit": <int>}
+      2. Query param: ?commit_limit=<int>
+      3. Env default: DETECTOR17_COMMIT_LIMIT (currently 50)
+    `commit_limit` must be an integer in [1, 500]; otherwise the request
+    is rejected with 400.
+
     Poll progress with:  GET /analysis_status?repo_name=<repo_name>
     Fetch results with:  GET /detector17/results/<repo_name>
     """
     organization = request.headers.get('X-User-Organization')
     if not organization:
         return jsonify({"error": "X-User-Organization header is required"}), 400
+
+    # ─── Resolve commit_limit (body → query → env default) ──────────────
+    raw_commit_limit = None
+    body = request.get_json(silent=True) or {}
+    if "commit_limit" in body:
+        raw_commit_limit = body["commit_limit"]
+    elif request.args.get("commit_limit") is not None:
+        raw_commit_limit = request.args.get("commit_limit")
+
+    if raw_commit_limit is None:
+        commit_limit = _COMMIT_LIMIT_DEFAULT
+        commit_limit_source = "default"
+    else:
+        try:
+            commit_limit = int(raw_commit_limit)
+        except (TypeError, ValueError):
+            return jsonify({
+                "error": "commit_limit must be an integer"
+            }), 400
+        if commit_limit < _COMMIT_LIMIT_MIN or commit_limit > _COMMIT_LIMIT_MAX:
+            return jsonify({
+                "error": (
+                    f"commit_limit must be between {_COMMIT_LIMIT_MIN} "
+                    f"and {_COMMIT_LIMIT_MAX}"
+                )
+            }), 400
+        commit_limit_source = "user"
 
     # 1. Check that repo is registered
     repos = {r["name"]: r for r in get_all_repos_from_db(organization=organization)}
@@ -430,18 +484,21 @@ def analyze_detector17(repo_name):
     try:
         _detector17_bg_executor.submit(
             _analyze_detector17_repository_task,
-            repo_name, repo_url, local_path
+            repo_name, repo_url, local_path, commit_limit
         )
         logging.info(
             f"[detector17] submitted BG task for '{repo_name}' "
-            f"(up to 5 repos run in parallel)"
+            f"(up to 5 repos run in parallel, commit_limit={commit_limit}, "
+            f"source={commit_limit_source})"
         )
         return jsonify({
-            "message":          "Detector17 analysis started in the background.",
-            "repo_name":        repo_name,
-            "ku_source":        "detector17",
-            "status_endpoint":  f"/analysis_status?repo_name={repo_name}",
-            "results_endpoint": f"/detector17/results/{repo_name}",
+            "message":            "Detector17 analysis started in the background.",
+            "repo_name":          repo_name,
+            "ku_source":          "detector17",
+            "commit_limit":       commit_limit,
+            "commit_limit_source": commit_limit_source,
+            "status_endpoint":    f"/analysis_status?repo_name={repo_name}",
+            "results_endpoint":   f"/detector17/results/{repo_name}",
         }), 202
     except Exception as e:
         logging.exception(f"[detector17] failed to submit BG task for {repo_name}")
@@ -508,3 +565,119 @@ def delete_results(repo_name):
     n = delete_analysis_by_source(repo_name, ku_source="detector17")
     return jsonify({"deleted_rows": n, "repo": repo_name,
                     "ku_source": "detector17"})
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# ΝΕΟ — Risk & Skills endpoints για το Detector17 (ku_source='detector17')
+# Μιμούνται ακριβώς το σχήμα των legacy /ku_risk, /employee_risk,
+# /organizationskills, αλλά υπολογίζονται ΜΟΝΟ πάνω στα Detector17 rows.
+# Τα legacy endpoints δεν θίγονται.
+# ═════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /detector17/ku_risk
+# ─────────────────────────────────────────────────────────────────────────
+@detector17_bp.route("/ku_risk", methods=["GET"])
+def get_ku_risk_detector17():
+    """
+    Calculates and returns the risk associated with each Detector17 KU.
+    Same binomial model (20% departure threshold, p_individual_leave=0.1)
+    as the legacy /ku_risk endpoint, but computed over ku_source='detector17'
+    rows ONLY — so results reflect the 17 custom IoT/JEE/DT KUs.
+
+    Headers:
+      X-User-Organization (required)
+    Query Parameters (optional):
+      repo_name — filter risk to a single repository within the organization.
+    """
+    organization = request.headers.get("X-User-Organization")
+    if not organization:
+        return jsonify({"error": "X-User-Organization header is required"}), 400
+
+    repo_name = request.args.get("repo_name")   # None → whole organization
+
+    try:
+        risk_data = calculate_risks_detector17(
+            organization=organization, repo_name=repo_name
+        )
+        if "error" in risk_data:
+            return jsonify(risk_data), 500
+
+        ku_risk_list = [
+            {"ku_name": ku, **data}
+            for ku, data in risk_data.get("ku_risk", {}).items()
+        ]
+        return jsonify(ku_risk_list), 200
+
+    except Exception as e:
+        logging.exception("[detector17] /ku_risk failed")
+        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /detector17/employee_risk
+# ─────────────────────────────────────────────────────────────────────────
+@detector17_bp.route("/employee_risk", methods=["GET"])
+def get_employee_risk_detector17():
+    """
+    Calculates the risk associated with the hypothetical departure of each
+    employee, considering ONLY KUs from the Detector17 taxonomy. Mirrors
+    the legacy /employee_risk endpoint in shape and semantics.
+
+    Headers:
+      X-User-Organization (required)
+    Query Parameters (optional):
+      repo_name — filter to a single repository within the organization.
+    """
+    organization = request.headers.get("X-User-Organization")
+    if not organization:
+        return jsonify({"error": "X-User-Organization header is required"}), 400
+
+    repo_name = request.args.get("repo_name")   # None → whole organization
+
+    try:
+        risk_data = calculate_risks_detector17(
+            organization=organization, repo_name=repo_name
+        )
+        if "error" in risk_data:
+            return jsonify(risk_data), 500
+
+        employee_risk_list = [
+            {"employee_name": employee, **data}
+            for employee, data in risk_data.get("employee_risk", {}).items()
+        ]
+        return jsonify(employee_risk_list), 200
+
+    except Exception as e:
+        logging.exception("[detector17] /employee_risk failed")
+        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /detector17/organizationskills
+# ─────────────────────────────────────────────────────────────────────────
+@detector17_bp.route("/organizationskills", methods=["GET"])
+def get_organization_skills_detector17():
+    """
+    Returns a summary of 'knowledge skills' for the organization, computed
+    over Detector17 KUs only (ku_source='detector17'). For each KU, returns
+    the total number of unique files and unique authors.
+
+    Headers:
+      X-User-Organization (required)
+    """
+    organization_name = request.headers.get("X-User-Organization")
+    if not organization_name:
+        return jsonify({"error": "X-User-Organization header is required"}), 400
+
+    try:
+        skills_data = get_ku_skills_by_organization_detector17(organization_name)
+        if skills_data is None:
+            return jsonify({
+                "error": "Failed to retrieve Detector17 skills for the organization"
+            }), 500
+        return jsonify(skills_data), 200
+
+    except Exception as e:
+        logging.exception("[detector17] /organizationskills failed")
+        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
