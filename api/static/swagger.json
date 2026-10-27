@@ -2016,7 +2016,7 @@
           "Detector17 (17 Custom KUs)"
         ],
         "summary": "Analyze repository with Detector17",
-        "description": "Starts analysis of a repository using the Detector17 model (UnixCoder fine-tuned on 17 custom IoT/JEE/DT Knowledge Units). Runs file-level inference on changed files per commit. Writes results to the 'analysis_results' table with ku_source='detector17' so they do not interfere with legacy K1-K27 data.\n\nThe caller SHOULD provide `commit_limit` to control how far back in git history the scan walks. Resolution order: JSON body → query string → env default (`DETECTOR17_COMMIT_LIMIT`, currently 50). Allowed range: 1–500.",
+        "description": "Starts analysis of a repository using the Detector17 model (UnixCoder fine-tuned on 17 custom IoT/JEE/DT Knowledge Units). Runs file-level inference on changed files per commit. Writes results to the 'analysis_results' table with ku_source='detector17' so they do not interfere with legacy K1-K27 data.\n\nThe caller SHOULD provide `commit_limit` to control how far back in git history the scan walks. Resolution order: JSON body → query string; if not provided, the full git history is analyzed. Must be an integer >= 1.",
         "parameters": [
           {
             "name": "X-User-Organization",
@@ -2042,11 +2042,10 @@
             "name": "commit_limit",
             "in": "query",
             "required": false,
-            "description": "Optional. Overrides the environment default. Also acceptable in the JSON body — if both are present, the body wins. Must be an integer in [1, 500].",
+            "description": "Optional. Overrides the environment default. Also acceptable in the JSON body — if both are present, the body wins. Must be an integer >= 1. Omit to analyze the full history.",
             "schema": {
               "type": "integer",
-              "minimum": 1,
-              "maximum": 500
+              "minimum": 1
             },
             "example": 100
           }
@@ -2061,9 +2060,8 @@
                 "properties": {
                   "commit_limit": {
                     "type": "integer",
-                    "description": "How many of the most recent non-merge commits to walk when extracting files for inference. Must be between 1 and 500.",
+                    "description": "How many of the most recent non-merge commits to walk when extracting files for inference. Must be >= 1. Omit to analyze the full history.",
                     "minimum": 1,
-                    "maximum": 500,
                     "example": 100
                   }
                 }
@@ -2116,7 +2114,7 @@
             }
           },
           "400": {
-            "description": "Missing X-User-Organization header, or commit_limit is not an integer in [1, 500].",
+            "description": "Missing X-User-Organization header, or commit_limit is not an integer >= 1.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2124,7 +2122,7 @@
                   "properties": {
                     "error": {
                       "type": "string",
-                      "example": "commit_limit must be between 1 and 500"
+                      "example": "commit_limit must be at least 1"
                     }
                   }
                 }
