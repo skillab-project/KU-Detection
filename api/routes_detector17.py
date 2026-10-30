@@ -67,6 +67,8 @@ from api.data_db_detector17 import (
     # ΝΕΟ: risk & skills για το ku_source='detector17'
     calculate_risks_detector17,
     get_ku_skills_by_organization_detector17,
+    # ΝΕΟ: Impact@Loss (per-employee) για το ku_source='detector17'
+    calculate_impact_at_loss_detector17,
 )
 
 
@@ -119,11 +121,14 @@ try:
 except (ValueError, TypeError):
     _MAX_FILE_WORKERS = 4
 
-# No commit_limit from the caller → analyze the full git history
-_COMMIT_LIMIT_DEFAULT = None
+try:
+    _COMMIT_LIMIT_DEFAULT = int(os.getenv("DETECTOR17_COMMIT_LIMIT", "50"))
+except (ValueError, TypeError):
+    _COMMIT_LIMIT_DEFAULT = 50
 
-# Lower bound for user-supplied commit_limit
+# Bounds for user-supplied commit_limit (prevents runaway analyses)
 _COMMIT_LIMIT_MIN = 1
+_COMMIT_LIMIT_MAX = 500
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -173,7 +178,7 @@ def _extract_detector17_files(local_path: str, commit_limit: int = _COMMIT_LIMIT
       - read_files_from_dict_list (which skips files whose SHA already has
         legacy analysis, and overwrites basename collisions)
 
-    Returns ({unique_key: CodeFile}, total_commits) ready for Detector17 inference.
+    Returns a dict {unique_key: CodeFile} ready for Detector17 inference.
     The unique_key is "<sha_short>:<relative_path>" so files with the same
     basename in different directories don't collide.
     """
@@ -181,7 +186,7 @@ def _extract_detector17_files(local_path: str, commit_limit: int = _COMMIT_LIMIT
     commits = list(repo.iter_commits('HEAD', max_count=commit_limit))
     logging.info(
         f"[detector17] walking {len(commits)} commits in {local_path} "
-        f"(limit={commit_limit or 'full history'})"
+        f"(limit={commit_limit})"
     )
 
     files = {}
@@ -243,7 +248,7 @@ def _extract_detector17_files(local_path: str, commit_limit: int = _COMMIT_LIMIT
     logging.info(
         f"[detector17] extracted {len(files)} analyzable files from {local_path}"
     )
-    return files, len(commits)
+    return files
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -311,7 +316,7 @@ def _analyze_detector17_repository_task(repo_name, repo_url, local_path, commit_
                 logging.warning(f"[detector17] pull failed, continuing: {e}")
 
         # 2. Build file list directly from git log (bypass legacy loader)
-        files, total_commits = _extract_detector17_files(local_path, commit_limit=commit_limit)
+        files = _extract_detector17_files(local_path, commit_limit=commit_limit)
         total = len(files)
         if total == 0:
             logging.warning(
@@ -337,14 +342,6 @@ def _analyze_detector17_repository_task(repo_name, repo_url, local_path, commit_
         model = _get_model()
         analyzed = 0
 
-        # Commit progress: a commit counts as done when all its files are done
-        # (commits with no analyzable files are done from the start).
-        files_left_per_commit = {}
-        for f in files.values():
-            files_left_per_commit[f.sha] = files_left_per_commit.get(f.sha, 0) + 1
-        commits_done = total_commits - len(files_left_per_commit)
-        next_commit_log = (commits_done // 100 + 1) * 100
-
         # 4. Parallel per-file inference (inner executor, per-task)
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=_MAX_FILE_WORKERS,
@@ -353,21 +350,11 @@ def _analyze_detector17_repository_task(repo_name, repo_url, local_path, commit_
 
             futures = {
                 file_executor.submit(_analyze_single_file_detector17, file, model):
-                    file.sha
+                    file.filename
                 for file in files.values()
             }
 
             for future in concurrent.futures.as_completed(futures):
-                sha = futures[future]
-                files_left_per_commit[sha] -= 1
-                if files_left_per_commit[sha] == 0:
-                    commits_done += 1
-                    if commits_done >= next_commit_log or commits_done == total_commits:
-                        logging.info(
-                            f"[detector17] BG TASK: {commits_done}/{total_commits} "
-                            f"commits analyzed for {repo_name}"
-                        )
-                        next_commit_log = (commits_done // 100 + 1) * 100
                 try:
                     result = future.result()
                     if "error" in result:
@@ -434,8 +421,8 @@ def analyze_detector17(repo_name):
     history the scan walks. Resolution order:
       1. JSON body:   {"commit_limit": <int>}
       2. Query param: ?commit_limit=<int>
-      3. Not provided → the full git history is analyzed
-    `commit_limit` must be an integer >= 1; otherwise the request
+      3. Env default: DETECTOR17_COMMIT_LIMIT (currently 50)
+    `commit_limit` must be an integer in [1, 500]; otherwise the request
     is rejected with 400.
 
     Poll progress with:  GET /analysis_status?repo_name=<repo_name>
@@ -463,9 +450,12 @@ def analyze_detector17(repo_name):
             return jsonify({
                 "error": "commit_limit must be an integer"
             }), 400
-        if commit_limit < _COMMIT_LIMIT_MIN:
+        if commit_limit < _COMMIT_LIMIT_MIN or commit_limit > _COMMIT_LIMIT_MAX:
             return jsonify({
-                "error": f"commit_limit must be at least {_COMMIT_LIMIT_MIN}"
+                "error": (
+                    f"commit_limit must be between {_COMMIT_LIMIT_MIN} "
+                    f"and {_COMMIT_LIMIT_MAX}"
+                )
             }), 400
         commit_limit_source = "user"
 
@@ -692,4 +682,44 @@ def get_organization_skills_detector17():
 
     except Exception as e:
         logging.exception("[detector17] /organizationskills failed")
+        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# ΝΕΟ — GET /detector17/impact_at_loss (per-employee, Detector17 KUs)
+# Αντικαθιστά εννοιολογικά το /detector17/employee_risk χωρίς να το
+# αντικαθιστά τεχνικά — το /detector17/employee_risk παραμένει διαθέσιμο
+# για συμβατότητα. Impact@Loss ∈ [0, 1] και πάντα μη αρνητικό.
+# ─────────────────────────────────────────────────────────────────────────
+@detector17_bp.route("/impact_at_loss", methods=["GET"])
+def get_impact_at_loss_detector17():
+    """
+    Returns the Impact@Loss score per employee, considering ONLY KUs from
+    the Detector17 taxonomy (ku_source='detector17').
+
+    Impact@Loss = AVG_i( my_importance[i] × IMPACT[i] )
+      where my_importance[i] = KU_mine[i] / KU_total[i]
+      and   IMPACT[i]        = KU_total[i] / total_files_in_scope
+
+    Headers:
+      X-User-Organization (required)
+    Query Parameters (optional):
+      repo_name — restrict calculation to a single repository.
+    """
+    organization = request.headers.get("X-User-Organization")
+    if not organization:
+        return jsonify({"error": "X-User-Organization header is required"}), 400
+
+    repo_name = request.args.get("repo_name")   # None → whole organization
+
+    try:
+        data = calculate_impact_at_loss_detector17(
+            organization=organization, repo_name=repo_name
+        )
+        if isinstance(data, dict) and "error" in data:
+            return jsonify(data), 500
+        return jsonify(data), 200
+
+    except Exception as e:
+        logging.exception("[detector17] /impact_at_loss failed")
         return jsonify({"error": f"An unexpected error occurred: {e}"}), 500

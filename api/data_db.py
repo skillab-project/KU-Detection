@@ -1462,3 +1462,147 @@ def get_ku_skills_by_organization(organization_name):
     finally:
         if 'conn' in locals() and conn is not None:
             conn.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# ΝΕΟ — Impact@Loss (per-employee knowledge-concentration score)
+# ─────────────────────────────────────────────────────────────────────────
+# Αντικαθιστά ΜΟΝΟ εννοιολογικά το absolute_employee_risk (που βασιζόταν
+# σε Δ risk = risk_after − risk_before και μπορούσε να γίνει αρνητικό λόγω
+# μη-μονοτονικής συμπεριφοράς του binomial P(X≥k) όταν αλλάζουν ΚΑΙ n ΚΑΙ k).
+# Ο legacy υπολογισμός (calculate_risks) ΔΕΝ τροποποιείται — παραμένει
+# διαθέσιμος στα /ku_risk και /employee_risk για πλήρη συμβατότητα.
+#
+# Για κάθε author και κάθε KU στο οποίο έχει συνεισφέρει:
+#     KU_mine[i]       = COUNT(DISTINCT filename) όπου author=X και KU[i]=1
+#     KU_total[i]      = COUNT(DISTINCT filename) όπου KU[i]=1
+#     total_files      = COUNT(DISTINCT filename) στο scope (org/repo)
+#     my_importance[i] = KU_mine[i] / KU_total[i]
+#     IMPACT[i]        = KU_total[i] / total_files
+#     Impact@Loss      = AVG_i( my_importance[i] × IMPACT[i] )
+#
+# Ιδιότητες:
+#   • Μη αρνητικό εξ ορισμού (όλοι οι παράγοντες ∈ [0,1]).
+#   • Μονοτονικό ως προς την έκθεση του author στο project (όσο περισσότερα
+#     αρχεία με δικό του KU, τόσο μεγαλύτερο).
+#   • Ορισμένο σε ένα-μόνο-author σενάρια, όπου το προηγούμενο Δ δεν ήταν.
+#   • COUNT(DISTINCT filename) → δεν μετράμε διπλά τα ίδια αρχεία σε
+#     διαφορετικά commits.
+# ═════════════════════════════════════════════════════════════════════════
+
+def calculate_impact_at_loss(organization=None, repo_name=None):
+    """
+    Υπολογίζει το Impact@Loss ανά employee ΜΟΝΟ για legacy KUs
+    (ku_source='legacy'). Για το Detector17 δες
+    data_db_detector17.calculate_impact_at_loss_detector17().
+
+    Returns:
+        [
+          {"employee_name": str,
+           "impact_at_loss": float,     # ∈ [0, 1]
+           "ku_count": int},
+          ...
+        ]
+        Ταξινομημένο κατά impact_at_loss φθίνοντα.
+
+    Σε περίπτωση σφάλματος DB, επιστρέφει {"error": str}.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Common filters (ku_source='legacy' + optional org + optional repo)
+        base_where = " WHERE ar.ku_source = 'legacy' "
+        conditions = []
+        params = []
+        if organization:
+            conditions.append("r.organization = %s")
+            params.append(organization)
+        if repo_name:
+            conditions.append("ar.repo_name = %s")
+            params.append(repo_name)
+        where_extra = (" AND " + " AND ".join(conditions)) if conditions else ""
+
+        # 1) total distinct files στο scope — denominator του IMPACT
+        count_query = (
+            "SELECT COUNT(DISTINCT ar.filename) "
+            "FROM analysis_results ar "
+            "JOIN repositories r ON ar.repo_name = r.name "
+            + base_where + where_extra
+        )
+        cur.execute(count_query, tuple(params))
+        row = cur.fetchone()
+        total_files = int(row[0]) if row and row[0] else 0
+
+        # 2) raw rows για να χτίσουμε KU_total[i] και KU_mine[i, author]
+        select_query = (
+            "SELECT ar.filename, ar.author, ar.detected_kus "
+            "FROM analysis_results ar "
+            "JOIN repositories r ON ar.repo_name = r.name "
+            + base_where + where_extra
+        )
+        cur.execute(select_query, tuple(params))
+        rows = cur.fetchall()
+
+        cur.close()
+        conn.close()
+        conn = None
+
+        if total_files == 0 or not rows:
+            return []
+
+        # KU_total[i]: μοναδικά filenames όπου KU[i]=1 (σε ολόκληρο το scope)
+        ku_files_total = defaultdict(set)
+        # KU_mine[author][i]: μοναδικά filenames του author όπου KU[i]=1
+        author_ku_files = defaultdict(lambda: defaultdict(set))
+
+        for filename, author, detected_kus in rows:
+            # JSONB → ήδη dict από το psycopg2· αν όμως είναι str, parse το
+            if isinstance(detected_kus, str):
+                try:
+                    detected_kus = json.loads(detected_kus)
+                except Exception:
+                    continue
+            if not detected_kus:
+                continue
+            for ku, is_present in detected_kus.items():
+                try:
+                    if int(is_present) == 1:
+                        ku_files_total[ku].add(filename)
+                        author_ku_files[author][ku].add(filename)
+                except (TypeError, ValueError):
+                    continue
+
+        results = []
+        for author, kus in author_ku_files.items():
+            per_ku_scores = []
+            for ku, mine_filenames in kus.items():
+                ku_total = len(ku_files_total.get(ku, ()))
+                if ku_total == 0:
+                    continue
+                mine = len(mine_filenames)
+                my_importance = mine / ku_total          # ∈ (0, 1]
+                impact = ku_total / total_files          # ∈ (0, 1]
+                per_ku_scores.append(my_importance * impact)
+
+            if per_ku_scores:
+                impact_at_loss = sum(per_ku_scores) / len(per_ku_scores)
+            else:
+                impact_at_loss = 0.0
+
+            results.append({
+                "employee_name": author,
+                "impact_at_loss": impact_at_loss,
+                "ku_count": len(per_ku_scores),
+            })
+
+        results.sort(key=lambda x: x["impact_at_loss"], reverse=True)
+        return results
+
+    except Exception as e:
+        logging.exception("calculate_impact_at_loss failed")
+        return {"error": str(e)}
+    finally:
+        if conn is not None:
+            conn.close()

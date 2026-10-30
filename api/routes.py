@@ -33,6 +33,7 @@ from api.data_db import (
     calculate_risks, get_ku_counts_by_developer,
     get_all_developer_ku_vectors,
     get_ku_skills_by_organization,
+    calculate_impact_at_loss,  # ΝΕΟ — Impact@Loss (per-employee)
 )
 from core.git_operations import clone_repo, repo_exists, extract_contributions
 from core.git_operations.repo import pull_repo, get_history_repo
@@ -385,6 +386,43 @@ def init_routes(app):
         except Exception as e:
             logging.exception("Error in /employee_risk endpoint")
             return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
+    # ─────────────────────────────────────────────────────────────────────
+    # ΝΕΟ — GET /impact_at_loss (legacy KUs, ku_source='legacy')
+    # Αντικαθιστά εννοιολογικά το /employee_risk χωρίς να το αντικαθιστά
+    # τεχνικά — το /employee_risk παραμένει διαθέσιμο για συμβατότητα.
+    # Impact@Loss = AVG_i( my_importance[i] × IMPACT[i] )  ∈ [0, 1]
+    # ─────────────────────────────────────────────────────────────────────
+    @app.route("/impact_at_loss", methods=["GET"])
+    def get_impact_at_loss_endpoint():
+        """
+        Returns the Impact@Loss score for every author who has contributed
+        at least one legacy KU. The score is always non-negative and
+        monotonic to how exposed the author is to the project.
+
+        Headers:
+          X-User-Organization (required)
+        Query Parameters (optional):
+          repo_name — restrict calculation to a single repository.
+        """
+        organization = request.headers.get('X-User-Organization')
+        if not organization:
+            return jsonify({"error": "X-User-Organization header is required"}), 400
+
+        repo_name = request.args.get('repo_name')   # None → whole organization
+
+        try:
+            data = calculate_impact_at_loss(
+                organization=organization, repo_name=repo_name
+            )
+            if isinstance(data, dict) and "error" in data:
+                return jsonify(data), 500
+            return jsonify(data), 200
+
+        except Exception as e:
+            logging.exception("Error in /impact_at_loss endpoint")
+            return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
 
     @app.route("/analyze", methods=["GET"])
     def analyze():

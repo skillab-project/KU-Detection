@@ -383,3 +383,129 @@ def get_ku_skills_by_organization_detector17(organization_name):
     finally:
         if conn is not None:
             conn.close()
+
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# ΝΕΟ — Impact@Loss (Detector17 variant, ku_source='detector17')
+# ─────────────────────────────────────────────────────────────────────────
+# Mirror του calculate_impact_at_loss() από data_db.py, φιλτραρισμένο στα
+# Detector17 KUs. Ο legacy calculate_risks_detector17 ΔΕΝ τροποποιείται.
+#
+# Για κάθε author και κάθε Detector17 KU στο οποίο έχει συνεισφέρει:
+#     my_importance[i] = KU_mine[i] / KU_total[i]
+#     IMPACT[i]        = KU_total[i] / total_files
+#     Impact@Loss      = AVG_i( my_importance[i] × IMPACT[i] )
+# ═════════════════════════════════════════════════════════════════════════
+
+def calculate_impact_at_loss_detector17(organization=None, repo_name=None):
+    """
+    Υπολογίζει το Impact@Loss ανά employee ΜΟΝΟ για Detector17 KUs
+    (ku_source='detector17').
+
+    Returns:
+        [
+          {"employee_name": str,
+           "impact_at_loss": float,     # ∈ [0, 1]
+           "ku_count": int},
+          ...
+        ]
+        Ταξινομημένο κατά impact_at_loss φθίνοντα.
+
+    Σε περίπτωση σφάλματος DB, επιστρέφει {"error": str}.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        base_where = " WHERE ar.ku_source = 'detector17' "
+        conditions = []
+        params = []
+        if organization:
+            conditions.append("r.organization = %s")
+            params.append(organization)
+        if repo_name:
+            conditions.append("ar.repo_name = %s")
+            params.append(repo_name)
+        where_extra = (" AND " + " AND ".join(conditions)) if conditions else ""
+
+        # 1) total distinct files στο scope (denominator του IMPACT)
+        count_query = (
+            "SELECT COUNT(DISTINCT ar.filename) "
+            "FROM analysis_results ar "
+            "JOIN repositories r ON ar.repo_name = r.name "
+            + base_where + where_extra
+        )
+        cur.execute(count_query, tuple(params))
+        row = cur.fetchone()
+        total_files = int(row[0]) if row and row[0] else 0
+
+        # 2) raw rows για να χτίσουμε KU_total[i] και KU_mine[i, author]
+        select_query = (
+            "SELECT ar.filename, ar.author, ar.detected_kus "
+            "FROM analysis_results ar "
+            "JOIN repositories r ON ar.repo_name = r.name "
+            + base_where + where_extra
+        )
+        cur.execute(select_query, tuple(params))
+        rows = cur.fetchall()
+
+        cur.close()
+        conn.close()
+        conn = None
+
+        if total_files == 0 or not rows:
+            return []
+
+        ku_files_total = defaultdict(set)
+        author_ku_files = defaultdict(lambda: defaultdict(set))
+
+        for filename, author, detected_kus in rows:
+            if isinstance(detected_kus, str):
+                try:
+                    detected_kus = json.loads(detected_kus)
+                except Exception:
+                    continue
+            if not detected_kus:
+                continue
+            for ku, is_present in detected_kus.items():
+                try:
+                    if int(is_present) == 1:
+                        ku_files_total[ku].add(filename)
+                        author_ku_files[author][ku].add(filename)
+                except (TypeError, ValueError):
+                    continue
+
+        results = []
+        for author, kus in author_ku_files.items():
+            per_ku_scores = []
+            for ku, mine_filenames in kus.items():
+                ku_total = len(ku_files_total.get(ku, ()))
+                if ku_total == 0:
+                    continue
+                mine = len(mine_filenames)
+                my_importance = mine / ku_total
+                impact = ku_total / total_files
+                per_ku_scores.append(my_importance * impact)
+
+            if per_ku_scores:
+                impact_at_loss = sum(per_ku_scores) / len(per_ku_scores)
+            else:
+                impact_at_loss = 0.0
+
+            results.append({
+                "employee_name": author,
+                "impact_at_loss": impact_at_loss,
+                "ku_count": len(per_ku_scores),
+            })
+
+        results.sort(key=lambda x: x["impact_at_loss"], reverse=True)
+        return results
+
+    except Exception as e:
+        logging.exception("calculate_impact_at_loss_detector17 failed")
+        return {"error": str(e)}
+    finally:
+        if conn is not None:
+            conn.close()

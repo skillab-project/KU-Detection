@@ -129,6 +129,101 @@
         }
       }
     },
+    "/impact_at_loss": {
+      "get": {
+        "tags": [
+          "Risk Analysis"
+        ],
+        "summary": "Calculate Impact@Loss (per employee)",
+        "description": "Returns the Impact@Loss score for every employee who has contributed at least one legacy KU (ku_source='legacy'). Impact@Loss = AVG_i(my_importance[i] × IMPACT[i]) where my_importance[i] = KU_mine[i] / KU_total[i] and IMPACT[i] = KU_total[i] / total_files_in_scope. Always non-negative (∈ [0, 1]) by construction and monotonic to the employee's exposure to the project — supersedes the delta-based /employee_risk conceptually, while /employee_risk itself remains available for backward compatibility.",
+        "parameters": [
+          {
+            "name": "X-User-Organization",
+            "in": "header",
+            "required": true,
+            "description": "The name of the organization to filter data by.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "apache"
+          },
+          {
+            "name": "repo_name",
+            "in": "query",
+            "required": false,
+            "description": "Optional. Restrict the calculation to a single repository within the organization. If omitted, the score is calculated over the entire organization.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "paho.mqtt.java"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Impact@Loss calculation was successful.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "employee_name": {
+                        "type": "string",
+                        "example": "jane.doe@example.com"
+                      },
+                      "impact_at_loss": {
+                        "type": "number",
+                        "format": "float",
+                        "description": "AVG(my_importance × IMPACT) across the employee's KUs, in [0, 1].",
+                        "example": 0.0421
+                      },
+                      "ku_count": {
+                        "type": "integer",
+                        "description": "Number of distinct KUs the employee has contributed to within the scope.",
+                        "example": 12
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing X-User-Organization header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "X-User-Organization header is required"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "An unexpected error occurred"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/employee_risk": {
       "get": {
         "tags": [
@@ -2890,6 +2985,101 @@
                       "ku_count": {
                         "type": "integer",
                         "example": 7
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing X-User-Organization header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "X-User-Organization header is required"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "An unexpected error occurred"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/detector17/impact_at_loss": {
+      "get": {
+        "tags": [
+          "Detector17 (17 Custom KUs)"
+        ],
+        "summary": "Calculate Impact@Loss (Detector17, per employee)",
+        "description": "Returns the Impact@Loss score per employee, considering ONLY KUs from the Detector17 taxonomy (ku_source='detector17'). Impact@Loss = AVG_i(my_importance[i] × IMPACT[i]) where my_importance[i] = KU_mine[i] / KU_total[i] and IMPACT[i] = KU_total[i] / total_files_in_scope. Always non-negative (∈ [0, 1]) by construction — supersedes the delta-based /detector17/employee_risk conceptually, while /detector17/employee_risk itself remains available for backward compatibility.",
+        "parameters": [
+          {
+            "name": "X-User-Organization",
+            "in": "header",
+            "required": true,
+            "description": "The name of the organization to filter data by.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "test"
+          },
+          {
+            "name": "repo_name",
+            "in": "query",
+            "required": false,
+            "description": "Optional. Restrict the calculation to a single repository within the organization. If omitted, the score is calculated over the entire organization.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "paho.mqtt.java"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Impact@Loss calculation was successful.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "employee_name": {
+                        "type": "string",
+                        "example": "james.sutton@ibm.com"
+                      },
+                      "impact_at_loss": {
+                        "type": "number",
+                        "format": "float",
+                        "description": "AVG(my_importance × IMPACT) across the employee's Detector17 KUs, in [0, 1].",
+                        "example": 0.0375
+                      },
+                      "ku_count": {
+                        "type": "integer",
+                        "description": "Number of distinct Detector17 KUs the employee has contributed to within the scope.",
+                        "example": 6
                       }
                     }
                   }
