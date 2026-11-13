@@ -1179,6 +1179,8 @@ def _probability_of_loss(emps: int, p_individual_leave: float = 0.1, threshold_p
 def calculate_risks(organization=None, repo_name=None):
     """
     Calculates KU Risk and Employee Risk — ΜΟΝΟ για legacy KUs.
+    Υποστηρίζει Organization level (μόνο organization) και
+    Project level (organization + repo_name).
     """
     try:
         conn = get_db_connection()
@@ -1228,22 +1230,24 @@ def calculate_risks(organization=None, repo_name=None):
                 "employee_risk": {}
             }
 
-        knowledge_units = defaultdict(lambda: {'freq': 0, 'authors': set()})
+        # ΔΙΟΡΘΩΣΗ: μετράμε DISTINCT files ανά KU (όχι rows),
+        # ώστε το ίδιο αρχείο σε πολλά commits να μη μετριέται πολλές φορές.
+        knowledge_units = defaultdict(lambda: {'files': set(), 'authors': set()})
         author_ku_map = defaultdict(set)
 
         for filename, author, detected_kus in analysis_data:
             for ku, is_present in detected_kus.items():
                 if int(is_present) == 1:
-                    knowledge_units[ku]['freq'] += 1
+                    knowledge_units[ku]['files'].add(filename)
                     knowledge_units[ku]['authors'].add(author)
                     author_ku_map[author].add(ku)
 
         ku_risk_results = {}
         for ku, data in knowledge_units.items():
             emps = len(data['authors'])
-            freq = data['freq']
+            freq = len(data['files'])                 # distinct files με αυτό το KU
             p_L = _probability_of_loss(emps)
-            impact = freq / total_files
+            impact = min(1.0, freq / total_files)     # clamp ∈ [0, 1]
             ku_risk = p_L * impact
             ku_risk_results[ku] = {
                 "ku_risk": ku_risk,
@@ -1260,9 +1264,9 @@ def calculate_risks(organization=None, repo_name=None):
             total_before_risk = 0.0
             for ku in kus:
                 ku_data = knowledge_units[ku]
-                freq = ku_data['freq']
+                freq = len(ku_data['files'])              # distinct files
                 emps_before = len(ku_data['authors'])
-                impact = freq / total_files
+                impact = min(1.0, freq / total_files)     # clamp ∈ [0, 1]
                 p_L_before = _probability_of_loss(emps_before)
                 risk_before = p_L_before * impact
                 employees_leaving = max(1, math.ceil(0.20 * emps_before))

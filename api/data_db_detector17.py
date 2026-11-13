@@ -191,28 +191,9 @@ def delete_analysis_by_source(repo_name: str, ku_source: str):
 def calculate_risks_detector17(organization=None, repo_name=None):
     """
     Calculates KU Risk and Employee Risk ONLY for Detector17 KUs.
+    Υποστηρίζει Organization level και Project level (repo_name).
 
-    Returns the same shape as calculate_risks() in data_db.py:
-        {
-          "ku_risk": {
-             "<ku_name>": {
-                 "ku_risk":  float,
-                 "probability_of_loss": float,
-                 "impact": float,
-                 "employee_count": int,
-                 "file_frequency": int,
-                 "employees_at_risk_threshold": int
-             }, ...
-          },
-          "employee_risk": {
-             "<author>": {
-                 "absolute_employee_risk": float,
-                 "relative_employee_risk": float,
-                 "ku_count": int
-             }, ...
-          }
-        }
-
+    Returns the same shape as calculate_risks() in data_db.py.
     Uses the shared _probability_of_loss() helper from data_db.py
     (binomial model, 20% threshold, p_individual_leave=0.1).
     """
@@ -261,7 +242,8 @@ def calculate_risks_detector17(organization=None, repo_name=None):
         if not analysis_data or total_files == 0:
             return {"ku_risk": {}, "employee_risk": {}}
 
-        knowledge_units = defaultdict(lambda: {'freq': 0, 'authors': set()})
+        # ΔΙΟΡΘΩΣΗ: DISTINCT files ανά KU (όχι rows)
+        knowledge_units = defaultdict(lambda: {'files': set(), 'authors': set()})
         author_ku_map = defaultdict(set)
 
         for filename, author, detected_kus in analysis_data:
@@ -270,7 +252,7 @@ def calculate_risks_detector17(organization=None, repo_name=None):
                 detected_kus = json.loads(detected_kus)
             for ku, is_present in detected_kus.items():
                 if int(is_present) == 1:
-                    knowledge_units[ku]['freq'] += 1
+                    knowledge_units[ku]['files'].add(filename)
                     knowledge_units[ku]['authors'].add(author)
                     author_ku_map[author].add(ku)
 
@@ -278,9 +260,9 @@ def calculate_risks_detector17(organization=None, repo_name=None):
         ku_risk_results = {}
         for ku, data in knowledge_units.items():
             emps = len(data['authors'])
-            freq = data['freq']
+            freq = len(data['files'])                 # distinct files με αυτό το KU
             p_L = _probability_of_loss(emps)
-            impact = freq / total_files
+            impact = min(1.0, freq / total_files)     # clamp ∈ [0, 1]
             ku_risk = p_L * impact
             ku_risk_results[ku] = {
                 "ku_risk": ku_risk,
@@ -298,9 +280,9 @@ def calculate_risks_detector17(organization=None, repo_name=None):
             total_before_risk = 0.0
             for ku in kus:
                 ku_data = knowledge_units[ku]
-                freq = ku_data['freq']
+                freq = len(ku_data['files'])              # distinct files
                 emps_before = len(ku_data['authors'])
-                impact = freq / total_files
+                impact = min(1.0, freq / total_files)     # clamp ∈ [0, 1]
                 p_L_before = _probability_of_loss(emps_before)
                 risk_before = p_L_before * impact
 
@@ -333,7 +315,6 @@ def calculate_risks_detector17(organization=None, repo_name=None):
     finally:
         if conn is not None:
             conn.close()
-
 
 def get_ku_skills_by_organization_detector17(organization_name):
     """
