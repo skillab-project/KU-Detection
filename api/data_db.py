@@ -1178,22 +1178,20 @@ def _probability_of_loss(emps: int, p_individual_leave: float = 0.1, threshold_p
 
 def calculate_risks(organization=None, repo_name=None):
     """
-    Calculates KU Risk and Employee Risk — ΜΟΝΟ για legacy KUs.
-    Υποστηρίζει Organization level (μόνο organization) και
-    Project level (organization + repo_name).
+    Calculates KU Risk (per Knowledge Unit) — ΜΟΝΟ για legacy KUs.
+    Το impact/risk υπολογίζεται πάνω στην ΤΡΕΧΟΥΣΑ έκδοση κάθε αρχείου
+    (latest row ανά filename), όχι σε όλη την ιστορία των commits.
+
+    Το employee-level risk δεν υπολογίζεται πλέον εδώ — χρησιμοποιείται
+    το Impact@Loss (calculate_impact_at_loss). Επιστρέφεται κενό dict
+    για συμβατότητα με το /employee_risk endpoint.
     """
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        base_query_select = '''
-            SELECT ar.filename, ar.author, ar.detected_kus
-            FROM analysis_results ar
-            JOIN repositories r ON ar.repo_name = r.name
-            WHERE ar.ku_source = 'legacy'
-        '''
-        base_query_count = '''
-            SELECT COUNT(DISTINCT ar.filename)
+        base_query = '''
+            SELECT ar.filename, ar.author, ar.detected_kus, ar.timestamp
             FROM analysis_results ar
             JOIN repositories r ON ar.repo_name = r.name
             WHERE ar.ku_source = 'legacy'
@@ -1201,53 +1199,49 @@ def calculate_risks(organization=None, repo_name=None):
 
         conditions = []
         params = []
-
         if organization:
             conditions.append("r.organization = %s")
             params.append(organization)
-
         if repo_name:
             conditions.append("ar.repo_name = %s")
             params.append(repo_name)
 
-        where_extra = ""
         if conditions:
-            where_extra = " AND " + " AND ".join(conditions)
+            base_query += " AND " + " AND ".join(conditions)
 
-        cur.execute(base_query_select + where_extra, tuple(params))
+        cur.execute(base_query, tuple(params))
         analysis_data = cur.fetchall()
-
-        cur.execute(base_query_count + where_extra, tuple(params))
-        total_files_result = cur.fetchone()
-        total_files = total_files_result[0] if total_files_result else 0
-
         cur.close()
         conn.close()
 
-        if not analysis_data or total_files == 0:
-            return {
-                "ku_risk": {},
-                "employee_risk": {}
-            }
+        if not analysis_data:
+            return {"ku_risk": {}, "employee_risk": {}}
 
-        # ΔΙΟΡΘΩΣΗ: μετράμε DISTINCT files ανά KU (όχι rows),
-        # ώστε το ίδιο αρχείο σε πολλά commits να μη μετριέται πολλές φορές.
+        # Κράτα ΜΟΝΟ την πιο πρόσφατη ανάλυση ανά filename (τρέχουσα έκδοση).
+        latest_by_file = {}   # filename -> (timestamp, author, detected_kus)
+        for filename, author, detected_kus, ts in analysis_data:
+            if filename not in latest_by_file or ts > latest_by_file[filename][0]:
+                latest_by_file[filename] = (ts, author, detected_kus)
+
+        total_files = len(latest_by_file)   # αρχεία τρέχουσας έκδοσης
+        if total_files == 0:
+            return {"ku_risk": {}, "employee_risk": {}}
+
         knowledge_units = defaultdict(lambda: {'files': set(), 'authors': set()})
-        author_ku_map = defaultdict(set)
-
-        for filename, author, detected_kus in analysis_data:
+        for filename, (ts, author, detected_kus) in latest_by_file.items():
+            if isinstance(detected_kus, str):
+                detected_kus = json.loads(detected_kus)
             for ku, is_present in detected_kus.items():
                 if int(is_present) == 1:
                     knowledge_units[ku]['files'].add(filename)
                     knowledge_units[ku]['authors'].add(author)
-                    author_ku_map[author].add(ku)
 
         ku_risk_results = {}
         for ku, data in knowledge_units.items():
             emps = len(data['authors'])
-            freq = len(data['files'])                 # distinct files με αυτό το KU
+            freq = len(data['files'])          # distinct τρέχοντα αρχεία με το KU
             p_L = _probability_of_loss(emps)
-            impact = min(1.0, freq / total_files)     # clamp ∈ [0, 1]
+            impact = freq / total_files        # εξ ορισμού ∈ [0, 1] — χωρίς min()
             ku_risk = p_L * impact
             ku_risk_results[ku] = {
                 "ku_risk": ku_risk,
@@ -1258,36 +1252,9 @@ def calculate_risks(organization=None, repo_name=None):
                 "employees_at_risk_threshold": max(1, math.ceil(0.20 * emps))
             }
 
-        employee_risk_results = {}
-        for author, kus in author_ku_map.items():
-            total_delta_risk = 0.0
-            total_before_risk = 0.0
-            for ku in kus:
-                ku_data = knowledge_units[ku]
-                freq = len(ku_data['files'])              # distinct files
-                emps_before = len(ku_data['authors'])
-                impact = min(1.0, freq / total_files)     # clamp ∈ [0, 1]
-                p_L_before = _probability_of_loss(emps_before)
-                risk_before = p_L_before * impact
-                employees_leaving = max(1, math.ceil(0.20 * emps_before))
-                emps_after = max(0, emps_before - employees_leaving)
-                p_L_after = _probability_of_loss(emps_after)
-                risk_after = p_L_after * impact
-                delta_risk = risk_after - risk_before
-                total_delta_risk += delta_risk
-                total_before_risk += risk_before
-
-            absolute_risk = total_delta_risk
-            relative_risk = absolute_risk / total_before_risk if total_before_risk > 0 else 0.0
-            employee_risk_results[author] = {
-                "absolute_employee_risk": absolute_risk,
-                "relative_employee_risk": relative_risk,
-                "ku_count": len(kus)
-            }
-
         return {
             "ku_risk": ku_risk_results,
-            "employee_risk": employee_risk_results
+            "employee_risk": {}   # deprecated — χρησιμοποιείται το Impact@Loss
         }
 
     except Exception as e:
