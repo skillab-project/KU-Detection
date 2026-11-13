@@ -191,12 +191,14 @@ def delete_analysis_by_source(repo_name: str, ku_source: str):
 def calculate_risks_detector17(organization=None, repo_name=None):
     """
     Calculates KU Risk (per Knowledge Unit) ONLY for Detector17 KUs.
-    Το impact/risk υπολογίζεται πάνω στην ΤΡΕΧΟΥΣΑ έκδοση κάθε αρχείου
-    (latest row ανά filename), όχι σε όλη την ιστορία των commits.
+
+    SCOPE:
+      - files/impact → μόνο η ΤΡΕΧΟΥΣΑ έκδοση κάθε αρχείου (latest ανά filename).
+      - authors/employee_count → ΟΛΟΙ οι ιστορικοί contributors των αρχείων που
+        έχουν το KU στην τρέχουσα έκδοση.
 
     Το employee-level risk δεν υπολογίζεται πλέον εδώ — χρησιμοποιείται
-    το Impact@Loss (calculate_impact_at_loss_detector17). Επιστρέφεται
-    κενό dict για συμβατότητα με το /detector17/employee_risk endpoint.
+    το Impact@Loss. Επιστρέφεται κενό dict για συμβατότητα.
     """
     conn = None
     try:
@@ -231,31 +233,36 @@ def calculate_risks_detector17(organization=None, repo_name=None):
         if not analysis_data:
             return {"ku_risk": {}, "employee_risk": {}}
 
-        # Κράτα ΜΟΝΟ την πιο πρόσφατη ανάλυση ανά filename (τρέχουσα έκδοση).
-        latest_by_file = {}   # filename -> (timestamp, author, detected_kus)
+        # (1) Τρέχουσα έκδοση: latest row ανά filename
+        latest_by_file = {}   # filename -> (timestamp, detected_kus)
+        # (2) Όλοι οι ιστορικοί authors ανά filename
+        authors_by_file = defaultdict(set)   # filename -> {authors}
+
         for filename, author, detected_kus, ts in analysis_data:
+            authors_by_file[filename].add(author)
             if filename not in latest_by_file or ts > latest_by_file[filename][0]:
-                latest_by_file[filename] = (ts, author, detected_kus)
+                latest_by_file[filename] = (ts, detected_kus)
 
         total_files = len(latest_by_file)   # αρχεία τρέχουσας έκδοσης
         if total_files == 0:
             return {"ku_risk": {}, "employee_risk": {}}
 
         knowledge_units = defaultdict(lambda: {'files': set(), 'authors': set()})
-        for filename, (ts, author, detected_kus) in latest_by_file.items():
+        for filename, (ts, detected_kus) in latest_by_file.items():
             if isinstance(detected_kus, str):
                 detected_kus = json.loads(detected_kus)
             for ku, is_present in detected_kus.items():
                 if int(is_present) == 1:
                     knowledge_units[ku]['files'].add(filename)
-                    knowledge_units[ku]['authors'].add(author)
+                    # ΟΛΟΙ όσοι άγγιξαν ΠΟΤΕ αυτό το (τρέχον) αρχείο
+                    knowledge_units[ku]['authors'].update(authors_by_file[filename])
 
         ku_risk_results = {}
         for ku, data in knowledge_units.items():
-            emps = len(data['authors'])
-            freq = len(data['files'])          # distinct τρέχοντα αρχεία με το KU
+            emps = len(data['authors'])          # όλοι οι ιστορικοί contributors
+            freq = len(data['files'])            # distinct τρέχοντα αρχεία με το KU
             p_L = _probability_of_loss(emps)
-            impact = freq / total_files        # εξ ορισμού ∈ [0, 1] — χωρίς min()
+            impact = freq / total_files          # ∈ [0, 1]
             ku_risk = p_L * impact
             ku_risk_results[ku] = {
                 "ku_risk": ku_risk,
